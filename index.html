@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Cache-Control" content="no-cache, must-revalidate">
+<meta name="theme-color" content="#08090d">
+<title>RANHUB — أفلام ومسلسلات وبرامج</title>
+<meta name="description" content="RANHUB: ابحث بوصف القصة أو بالاسم، وشوف البوستر والقصة الكاملة بالعربي، مع التصنيف العمري الحقيقي وروابط IMDb وStremio وYandex وغيرها.">
+
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='26' fill='%2308090d'/%3E%3Ctext x='50' y='68' font-family='sans-serif' font-size='52' font-weight='900' fill='%23ff7a2f' text-anchor='middle'%3ER%3C/text%3E%3C/svg%3E">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://image.tmdb.org">
+<link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/style.css?v=4.6.0">
+</head>
+<body>
+
+<a class="skip-link" href="#main">تخطَّ إلى المحتوى</a>
+
+<!-- ==================== الهيدر ==================== -->
+<header class="topbar" id="topbar">
+  <div class="topbar__inner">
+
+    <a class="brand" href="#/" data-route-home aria-label="RANHUB — الرئيسية">
+      <span class="brand__mark" aria-hidden="true">R</span>
+      <span class="brand__text">
+        <b>RANHUB</b>
+        <i>اوصف القصة… ونلقاه لك</i>
+      </span>
+    </a>
+
+    <form class="search" id="search-form" role="search" autocomplete="off">
+      <div class="search__box">
+        <svg class="search__icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/></svg>
+        <input
+          id="q"
+          class="search__input"
+          type="search"
+          name="q"
+          enterkeyhint="search"
+          placeholder="اسم العمل… أو وصف القصة: «رجل يعيش نفس اليوم مرة بعد مرة»"
+          aria-label="ابحث عن فيلم أو مسلسل أو برنامج">
+        <button type="button" class="search__clear" id="search-clear" aria-label="مسح البحث" hidden>&times;</button>
+        <button type="button" class="search__en" id="btn-to-en" title="حوّل بحثي للإنجليزي وأعد البحث" hidden>ترجم&nbsp;EN</button>
+        <button type="submit" class="search__go">بحث</button>
+      </div>
+      <div class="search__suggest" id="suggest" hidden></div>
+    </form>
+
+    <nav class="topbar__actions">
+      <button class="iconbtn" id="btn-fav" title="اللي عجبني" aria-label="اللي عجبني">
+        <span aria-hidden="true">👍</span>
+        <span class="badge" id="fav-count" hidden>0</span>
+      </button>
+      <button class="iconbtn" id="btn-lang" title="لغة المحتوى" aria-label="لغة المحتوى"><span id="lang-label">ع</span></button>
+      <button class="iconbtn" id="btn-settings" title="الإعدادات" aria-label="الإعدادات">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.6v2M12 19.4v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M2.6 12h2M19.4 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/></svg>
+      </button>
+    </nav>
+  </div>
+
+  <div class="notice" id="key-notice" hidden>
+    <span id="key-notice-text">🟡 تشتغل الآن بوضع محدود.</span>
+    <button class="notice__cta" id="notice-open-settings">أضف المفتاح</button>
+    <button class="notice__x" id="notice-dismiss" aria-label="إخفاء">&times;</button>
+  </div>
+</header>
+
+<main id="main">
+
+  <!-- ==================== الاستكشاف ==================== -->
+  <section class="view" id="view-home">
+
+    <nav class="tabs" id="tabs" role="tablist" aria-label="الأقسام">
+      <button class="tab tab--18 tab--en is-active" data-tab="general"  role="tab" aria-selected="true">🌹 General</button>
+      <button class="tab tab--18 tab--en" data-tab="explicit" role="tab" aria-selected="false">⛔ Explicit</button>
+      <button class="tab tab--18 tab--en" data-tab="foryou"   role="tab" aria-selected="false">✨ For You</button>
+    </nav>
+
+    <div class="feedbar">
+      <div class="feedbar__head">
+        <p class="feedbar__title feedbar__title--en" id="feed-title">🌹 General</p>
+        <button class="idxbtn" id="btn-index" type="button"
+          title="الفهرس المحلي هو مادة البحث بوصف القصة — كل ما كبر صار البحث أدق">
+          <span class="idxbtn__ico" aria-hidden="true">⚡</span>
+          <span class="idxbtn__txt">حدّث الفهرس</span>
+          <span class="idxbtn__n" id="index-count"></span>
+        </button>
+      </div>
+      <div class="feedbar__tools">
+        <label class="field--inline">
+          <span>النوع</span>
+          <select id="feed-type">
+            <option value="">الكل</option>
+            <option value="movie">🎬 أفلام</option>
+            <option value="tv">📺 مسلسلات</option>
+            <option value="reality">🎤 برامج واقعية</option>
+          </select>
+        </label>
+        <label class="field--inline">
+          <span>الترتيب</span>
+          <select id="feed-sort">
+            <option value="popularity.desc">الأكثر شهرة</option>
+            <option value="primary_release_date.desc">الأحدث</option>
+            <option value="vote_average.desc">الأعلى تقييمًا</option>
+            <option value="revenue.desc">الأعلى إيرادًا</option>
+            <option value="foryou">🎯 على ذوقي</option>
+          </select>
+        </label>
+        <label class="field--inline">
+          <span>اللغة الأصلية</span>
+          <select id="feed-lang">
+            <option value="">كل اللغات</option>
+            <option value="ar">عربي</option>
+            <option value="en">إنجليزي</option>
+            <option value="fr">فرنسي</option>
+            <option value="ja">ياباني</option>
+            <option value="ko">كوري</option>
+            <option value="hi">هندي</option>
+            <option value="es">إسباني</option>
+            <option value="it">إيطالي</option>
+            <option value="de">ألماني</option>
+            <option value="tr">تركي</option>
+            <option value="ru">روسي</option>
+            <option value="zh">صيني</option>
+          </select>
+        </label>
+        <label class="field--inline">
+          <span>أقل تقييم</span>
+          <select id="feed-rating">
+            <option value="0">أي تقييم</option>
+            <option value="5">5+</option>
+            <option value="6">6+</option>
+            <option value="7">7+</option>
+            <option value="8">8+</option>
+          </select>
+        </label>
+      </div>
+    </div>
+
+    <div class="grid" id="feed-grid" aria-live="polite"></div>
+    <div class="empty" id="feed-empty" hidden></div>
+    <div class="loadmore" id="feed-more" hidden>
+      <button class="btn" id="btn-feed-more">اعرض المزيد</button>
+      <p class="loadmore__note" id="feed-count"></p>
+    </div>
+    <div class="sentinel" id="feed-sentinel" aria-hidden="true"></div>
+  </section>
+
+  <!-- ==================== نتائج البحث ==================== -->
+  <section class="view" id="view-results" hidden>
+    <div class="results__head">
+      <div>
+        <h2 class="results__title" id="results-title">النتائج</h2>
+        <p class="results__meta" id="results-meta"></p>
+      </div>
+      <button class="btn btn--ghost" id="btn-back-home">الاستكشاف</button>
+    </div>
+
+    <div class="grid" id="results-grid" aria-live="polite"></div>
+    <div class="empty" id="results-empty" hidden></div>
+    <div class="loadmore" id="loadmore-wrap" hidden>
+      <button class="btn" id="btn-loadmore">اعرض المزيد</button>
+      <p class="loadmore__note" id="results-count"></p>
+    </div>
+    <div class="sentinel" id="results-sentinel" aria-hidden="true"></div>
+  </section>
+
+  <!-- ==================== اللي عجبني ==================== -->
+  <section class="view" id="view-liked" hidden>
+    <div class="results__head">
+      <div>
+        <h2 class="results__title">👍 اللي عجبني</h2>
+        <p class="results__meta" id="liked-meta"></p>
+      </div>
+      <div class="results__actions">
+        <button class="btn btn--ghost btn--sm" id="btn-export">⬇️ تصدير</button>
+        <button class="btn btn--ghost btn--sm" id="btn-import">⬆️ استيراد</button>
+        <button class="btn btn--ghost btn--sm" id="btn-reset-taste">صفّر ذوقي</button>
+        <button class="btn btn--ghost btn--sm" id="btn-liked-back">الاستكشاف</button>
+      </div>
+    </div>
+    <input type="file" id="import-file" accept="application/json,.json" hidden>
+
+    <div class="grid" id="liked-grid"></div>
+    <div class="empty" id="liked-empty" hidden>🤍 القائمة فاضية. اضغط 👍 تحت أي بوستر عشان يدخل هنا ويأثّر على الاستكشاف.</div>
+
+    <section id="disliked-wrap" hidden style="margin-top:2.5rem">
+      <h3 class="sec__title">👎 اللي ما عجبني <span class="sec__note">ما أرشّح لك شبيهها</span></h3>
+      <div class="grid" id="disliked-grid"></div>
+    </section>
+  </section>
+
+  <!-- ==================== صفحة العمل ==================== -->
+  <section class="view view--detail" id="view-detail" hidden>
+    <article id="detail-panel"></article>
+  </section>
+
+  <!-- ==================== صفحة شخص ==================== -->
+  <section class="view" id="view-person" hidden>
+    <article id="person-panel"></article>
+  </section>
+
+</main>
+
+<footer class="footer">
+  <p>🎬 <b>RANHUB</b> — البيانات من <a href="https://www.themoviedb.org/" target="_blank" rel="noopener">TMDB</a>
+    و<a href="https://ar.wikipedia.org/" target="_blank" rel="noopener">ويكيبيديا</a>
+    و<a href="https://www.wikidata.org/" target="_blank" rel="noopener">Wikidata</a>،
+    وبيانات التوفّر من <a href="https://www.justwatch.com/" target="_blank" rel="noopener">JustWatch</a> عبر TMDB.
+    غير تابع ولا معتمد من TMDB.</p>
+  <p class="footer__age">🔞 أقسام +18 مخصّصة للبالغين فقط.</p>
+</footer>
+
+<!-- ==================== الإعدادات ==================== -->
+<div class="modal" id="settings" hidden aria-modal="true" role="dialog" aria-label="الإعدادات">
+  <div class="modal__backdrop" data-close-settings></div>
+  <div class="modal__panel">
+    <header class="modal__head">
+      <h2>الإعدادات</h2>
+      <button class="iconbtn" data-close-settings aria-label="إغلاق">&times;</button>
+    </header>
+
+    <div class="modal__body">
+      <div class="keystate" id="key-state"></div>
+
+      <div class="field-row">
+        <label class="field">
+          <span class="field__label">لغة المحتوى</span>
+          <select id="set-lang">
+            <option value="ar">العربية</option>
+            <option value="en">English</option>
+          </select>
+        </label>
+        <label class="field">
+          <span class="field__label">منطقة المشاهدة</span>
+          <select id="set-region">
+            <option value="SA">السعودية</option>
+            <option value="AE">الإمارات</option>
+            <option value="EG">مصر</option>
+            <option value="KW">الكويت</option>
+            <option value="QA">قطر</option>
+            <option value="BH">البحرين</option>
+            <option value="OM">عُمان</option>
+            <option value="JO">الأردن</option>
+            <option value="MA">المغرب</option>
+            <option value="US">أمريكا</option>
+            <option value="GB">بريطانيا</option>
+            <option value="FR">فرنسا</option>
+            <option value="DE">ألمانيا</option>
+          </select>
+        </label>
+      </div>
+
+      <label class="switch">
+        <input type="checkbox" id="set-autotr">
+        <span><b>ترجمة تلقائية للقصة</b><i>يترجم أي ملخص أو قصة غير عربية للعربي بدون ما تضغط شي</i></span>
+      </label>
+
+      <label class="switch">
+        <input type="checkbox" id="set-adultonly">
+        <span><b>🔞 وضع الكبار فقط</b><i>الموقع كله مخصّص لهذا المحتوى — إطفاؤه يقفل الأقسام الثلاثة</i></span>
+      </label>
+
+      <p class="field__hint" style="margin:-.4rem 0 .2rem">
+        🟠 <b>بصراحة:</b> الأقسام الثلاثة تُبنى من كلمات TMDB المفتاحية
+        (erotic · softcore · sexploitation · nudity) لا من التصنيف العمري.
+        هذا اللي يمنع تسرّب الأفلام العادية المصنّفة R، لكنه يعني إن الكتالوج
+        محدود بما وسمه TMDB فعلًا — ما فيه مصدر مجاني أوسع منه.
+      </p>
+
+      <div class="field" id="catalog-box">
+        <span class="field__label">الفهرس المحلي للبحث</span>
+        <p class="field__hint" id="catalog-state">…</p>
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.5rem">
+          <button class="btn btn--ghost" id="btn-catalog-sweep" type="button">⚡ وسّع الفهرس الآن</button>
+          <button class="btn btn--ghost" id="btn-catalog-clear" type="button">🗑️ صفّره</button>
+        </div>
+      </div>
+
+      <h3 class="modal__sec">المصادر</h3>
+
+      <label class="field">
+        <span class="field__label">مفتاح TMDB خاص فيك <em>(اختياري)</em></span>
+        <span class="keyrow"><input type="password" id="api-key" placeholder="الموقع فيه مفتاح مشترك جاهز — اتركه فاضي" autocomplete="off" spellcheck="false"><button type="button" class="keyrow__test" data-test-key="api-key">تحقق</button></span><span class="keyrow__out" id="out-api-key"></span>
+        <small class="field__hint">
+          مفتاح مجاني من <a href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener">themoviedb.org</a> —
+          يقبل <b>v3</b> أو توكن <b>v4</b>. يُحفظ في متصفحك فقط.
+        </small>
+      </label>
+
+      <label class="field">
+        <span class="field__label">بريدك لرفع حد الترجمة <em>(اختياري)</em></span>
+        <span class="keyrow"><input type="email" id="tr-email" placeholder="name@example.com" autocomplete="off" spellcheck="false"><button type="button" class="keyrow__test" data-test-key="tr-email">تحقق</button></span><span class="keyrow__out" id="out-tr-email"></span>
+        <small class="field__hint">
+          الترجمة عبر <a href="https://mymemory.translated.net/" target="_blank" rel="noopener">MyMemory</a>:
+          ٥٠٠٠ حرف يوميًا بدون بريد، و٥٠ ألف مع بريد.
+        </small>
+      </label>
+
+      <p class="field__hint">
+        🟢 <b>شغّالة بدون أي مفتاح:</b> ويكيبيديا (بحث القصة) · Wikidata (روابط مباشرة) ·
+        MyMemory (الترجمة).
+      </p>
+
+      <h3 class="modal__sec">مصادرك</h3>
+      <p class="field__hint">
+        📊 كل مصدر هنا تحت تحكّمك: <b>شغّله · وقّفه · احذفه · تحقق منه</b> — بلا استئذان.
+        الموقع ينادي المفعّل منها لكل عمل ويعرض اللي رجّعه تحت «بيانات إضافية» في صفحة العمل.
+      </p>
+
+      <div class="srclist" id="ds-list"></div>
+
+      <label class="field">
+        <span class="field__label">١ · اختر المصدر</span>
+        <select id="ds-preset"></select>
+        <small class="field__hint" id="ds-hint">اختر مصدرًا من القائمة، أو «مصدر خاص فيي» لو عندك رابط API.</small>
+      </label>
+
+      <label class="field">
+        <span class="field__label">٢ · الصق المفتاح واضغط أضف</span>
+        <span class="keyrow">
+          <input type="text" id="ds-key" placeholder="الصق مفتاح API هنا" autocomplete="off" spellcheck="false">
+          <button type="button" class="keyrow__test" id="btn-ds-add">أضف</button>
+        </span>
+        <span class="keyrow__out" id="out-ds-add"></span>
+      </label>
+
+      <div class="field-row" id="ds-custom" hidden>
+        <label class="field" style="flex:1 1 100%">
+          <span class="field__label">رابط الـAPI <em>(للمصدر الخاص فقط)</em></span>
+          <input type="text" id="ds-url" dir="ltr" placeholder="https://api.example.com/movie/{imdb}?api_key={key}">
+          <small class="field__hint">
+            البدائل: <code>{key}</code> <code>{imdb}</code> <code>{tmdb}</code>
+            <code>{type}</code> <code>{title}</code> <code>{year}</code>
+          </small>
+        </label>
+        <label class="field" style="flex:1 1 100%">
+          <span class="field__label">الاسم <em>(اختياري)</em></span>
+          <input type="text" id="ds-name" placeholder="يُستنتج من الرابط">
+        </label>
+      </div>
+    </div>
+
+    <footer class="modal__foot">
+      <button class="btn btn--ghost" id="btn-clear-key">حذف مفتاحي</button>
+      <button class="btn btn--ghost" id="btn-test-key">🔍 تحقق من الاتصال</button>
+      <button class="btn" id="btn-save-settings">حفظ</button>
+    </footer>
+  </div>
+</div>
+
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="assets/js/config.js?v=4.6.0"></script>
+<script src="assets/js/taste.js?v=4.6.0"></script>
+<script src="assets/js/certs.js?v=4.6.0"></script>
+<script src="assets/js/tmdb.js?v=4.6.0"></script>
+<script src="assets/js/catalog.js?v=4.6.0"></script>
+<script src="assets/js/wiki.js?v=4.6.0"></script>
+<script src="assets/js/sources.js?v=4.6.0"></script>
+<script src="assets/js/datasources.js?v=4.6.0"></script>
+<script src="assets/js/links.js?v=4.6.0"></script>
+<script src="assets/js/feed.js?v=4.6.0"></script>
+<script src="assets/js/search.js?v=4.6.0"></script>
+<script src="assets/js/ui.js?v=4.6.0"></script>
+<script src="assets/js/app.js?v=4.6.0"></script>
+</body>
+</html>
