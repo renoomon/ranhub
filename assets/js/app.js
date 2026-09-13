@@ -3190,11 +3190,14 @@
     step(fillSelects);
     step(paintThemeBtn);
     step(function () { $('#lang-label').textContent = CS.state.lang === 'ar' ? 'ع' : 'EN'; });
+    /* الترتيب مقصود: taste.migrate يحذف cs.favorites بعد نقلها
+       للإعجابات، فلو سبق library.migrate ما لقى شيئًا وضاعت مفضلة
+       المستخدم القديمة من قائمة ⭐. المكتبة تقرأ أولًا. */
+    step(function () { CS.library.migrate(); });
     step(function () {
       var moved = CS.taste.migrate();
       if (moved) setTimeout(function () { CS.ui.toast('👍 نقلت ' + moved + ' من مفضلتك القديمة'); }, 900);
     });
-    step(function () { CS.library.migrate(); });
     step(function () {
       /* مفاتيح قديمة كانت خانات ثابتة — ننقلها لقائمة مصادره الموحّدة */
       if (CS.store.get(CS.KEYS.dsMigrated, false) === true) return;
