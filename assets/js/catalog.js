@@ -580,28 +580,89 @@
 
       var before = db.n;
       return CS.util.pool(plan, 4, function (job) {
-        var q = {
-          with_keywords: String(job.id),
-          /* الملخّص الإنجليزي هو مادة البحث: TMDB يرجّع ملخّصًا فاضيًا
-             تحت ar-SA لأغلب هذي الأعمال، فالكنس يطلب الإنجليزي صراحةً
-             ويخزّنه في حقل منفصل عن العربي. */
-          language: 'en-US',
-          sort_by: job.type === 'tv' && job.sort_by === 'primary_release_date.desc'
-            ? 'first_air_date.desc' : job.sort_by
-        };
-        /* الترتيب بالتقييم بلا حد أصوات يرفع أعمالًا بصوت واحد */
-        if (job.sort_by === 'vote_average.desc') q['vote_count.gte'] = 15;
-        return CS.tmdb.discover(job.type, q, job.page)
-          .then(function (list) {
-            var name = names[job.id];
-            (list || []).forEach(function (it) {
-              /* دليل المصدر: هذا العمل يحمل هذي الكلمة، بلا طلب */
-              if (name && CS.certs.seedKeyword) CS.certs.seedKeyword(it, name);
-            });
-            add(list);
-            return (list || []).length;
-          })
-          .catch(function () { return 0; });
+        return harvest(job, names);
+      }).then(function () {
+        sweeping = false; inFlight = null;
+        return db.n - before;
+      });
+    }).catch(function () { sweeping = false; inFlight = null; return 0; });
+
+    return inFlight;
+  }
+
+  /* جالب واحد لكل مهمة كنس — تستعمله الكنسة العادية والعميقة */
+  function harvest(job, names) {
+    var q = {
+      with_keywords: String(job.id),
+      /* الملخّص الإنجليزي هو مادة البحث: TMDB يرجّع ملخّصًا فاضيًا
+         تحت ar-SA لأغلب هذي الأعمال، فالكنس يطلب الإنجليزي صراحةً
+         ويخزّنه في حقل منفصل عن العربي. */
+      language: 'en-US',
+      sort_by: job.type === 'tv' && job.sort_by === 'primary_release_date.desc'
+        ? 'first_air_date.desc' : job.sort_by
+    };
+    /* الترتيب بالتقييم بلا حد أصوات يرفع أعمالًا بصوت واحد */
+    if (job.sort_by === 'vote_average.desc') q['vote_count.gte'] = 15;
+    return CS.tmdb.discover(job.type, q, job.page)
+      .then(function (list) {
+        var name = names[job.id];
+        (list || []).forEach(function (it) {
+          /* دليل المصدر: هذا العمل يحمل هذي الكلمة، بلا طلب */
+          if (name && CS.certs.seedKeyword) CS.certs.seedKeyword(it, name);
+        });
+        add(list);
+        return (list || []).length;
+      })
+      .catch(function () { return 0; });
+  }
+
+  /**
+   * تحديث قوي — كنسة أوسع من الزرّ العادي:
+   *   · كلمات القسمين (عام + صريح) لا العام وحده
+   *   · خمس ترتيبات لكل كلمة بدل ترتيب واحد
+   *   · صفحتان مختلفتان لكل كلمة + مسلسلات
+   *   · تتجاوز المهلة الزمنية وحدّ الجلسة لأنها بطلب صريح من المستخدم
+   * الهدف: مادة أحدث وأوسع للبحث بوصف القصة، وبوسترات أكثر للفهرس.
+   */
+  function deepSweep() {
+    if (!CS.hasKey() || !CS.feed) return Promise.resolve(0);
+    if (sweeping && inFlight) return inFlight;
+    if (sweeping) return Promise.resolve(0);
+
+    sweeping = true;
+    CS.store.set(SWEEP_KEY, +new Date());
+
+    inFlight = Promise.all([
+      CS.feed.keywordIds('general'),
+      CS.feed.keywordIds('explicit')
+    ]).then(function (sets) {
+      var ids = [];
+      sets.forEach(function (list) {
+        (list || []).forEach(function (id) { if (ids.indexOf(id) === -1) ids.push(id); });
+      });
+      if (!ids.length) { sweeping = false; inFlight = null; return 0; }
+
+      var names = {};
+      ['general', 'explicit'].forEach(function (tab) {
+        var map = CS.feed.keywordNames ? CS.feed.keywordNames(tab) : {};
+        Object.keys(map || {}).forEach(function (k) { names[k] = map[k]; });
+      });
+
+      var SORTS = ['popularity.desc', 'vote_count.desc', 'primary_release_date.desc',
+                   'vote_average.desc', 'revenue.desc'];
+      round++;
+      var plan = [];
+      ids.slice(0, 18).forEach(function (id, i) {
+        SORTS.forEach(function (sortBy, j) {
+          plan.push({ type: 'movie', id: id, sort_by: sortBy, page: 1 + ((round + i + j) % 6) });
+        });
+        plan.push({ type: 'tv', id: id, sort_by: 'popularity.desc', page: 1 + ((round + i) % 4) });
+        plan.push({ type: 'tv', id: id, sort_by: 'first_air_date.desc', page: 1 + ((round + i) % 3) });
+      });
+
+      var before = db.n;
+      return CS.util.pool(plan, 5, function (job) {
+        return harvest(job, names);
       }).then(function () {
         sweeping = false; inFlight = null;
         return db.n - before;
@@ -625,6 +686,7 @@
       return Math.log((total + 1) / ((df[String(name || '').toLowerCase()] || 0) + 1)) + 1;
     },
     sweep: sweep,
+    deepSweep: deepSweep,
     size: function () { return db.n || Object.keys(db.m).length; },
     has: function (item) { return !!db.m[keyOf(item)]; },
     record: function (item) { return db.m[keyOf(item)] || null; },

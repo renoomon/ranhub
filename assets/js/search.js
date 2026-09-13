@@ -582,6 +582,32 @@
 
   /* ---------- الأعمال ذات الصلة (من أفضل نتيجة) ---------- */
 
+  /* ------------------------------------------------------------
+     محرك ٤: كتالوجات مجانية — TVmaze · MyAnimeList · Internet Archive.
+     ما تدخل نتائجها مباشرة (البوابة تتحقق من TMDB وحده)، بل تجيب
+     أسماء أعمال فاتت بحث TMDB — خصوصًا الأعمال غير الإنجليزية —
+     ثم نطابقها مع TMDB، فيدخل العمل بعد فحصه ببوستره ووسومه.
+     ------------------------------------------------------------ */
+  function engineFree(q, qEn) {
+    if (!CS.freeCatalog) return Promise.resolve([]);
+    var term = qEn || q;
+    return CS.freeCatalog.findTitles(term).then(function (found) {
+      if (!found.length) return [];
+      return CS.util.pool(found, 4, function (f) {
+        var type = f.type === 'movie' ? 'movie' : 'tv';
+        return CS.tmdb.searchByTitle(type, f.title, f.year).then(function (cands) {
+          var best = (cands || [])[0];
+          if (!best) return null;
+          best.why = 'wiki';
+          best.whyText = 'من ' + f.provider;
+          best.engineScore = 8;
+          if (!best.overview && f.overview) best.overview = f.overview;
+          return best;
+        }).catch(function () { return null; });
+      }).then(function (list) { return (list || []).filter(Boolean); });
+    }).catch(function () { return []; });
+  }
+
   function relatedTo(top) {
     if (!CS.hasKey() || !top || top.source !== 'tmdb') return Promise.resolve([]);
 
@@ -655,6 +681,9 @@
       if (wantTitle) { meta.engines.push('title'); jobs.push(engineTitle(q, qEn)); }
       if (wantPlot)  { meta.engines.push('plot');  jobs.push(enginePlot(q, qEn, false)); }
       if (wantTheme) { meta.engines.push('theme'); jobs.push(engineTheme(q, qEn, tagOnly || intent === 'plot')); }
+
+      /* ٤) كتالوجات مجانية: توسّع الاكتشاف لما بحث TMDB يقصّر */
+      if (CS.freeCatalog) { meta.engines.push('free'); jobs.push(engineFree(q, qEn)); }
 
       return Promise.all(jobs.map(function (p) {
         return Promise.resolve(p).catch(function () { return []; });

@@ -463,6 +463,36 @@
     });
   }
 
+  /* ------------------------------------------------------------
+     «تحديث قوي» — الزرّ اللي جنب زرّ الفهرس.
+     الكنسة العادية خفيفة ومقيّدة بمهلة زمنية وكنسة واحدة لكل فتحة.
+     هذا الزرّ يتجاوزها بكنسة أوسع (كلمات القسمين · خمس ترتيبات ·
+     صفحات مختلفة) فيجيب مادة أحدث وأكثر للفهرس وبوسترات أكثر.
+     ------------------------------------------------------------ */
+  function runDeepSweep() {
+    if (!CS.catalog || !CS.catalog.deepSweep) return;
+    var btn = $('#btn-index-strong');
+    if (btn) btn.disabled = true;
+    paintIndexBtn('busy');
+    CS.ui.toast('🚀 تحديث قوي — يمسح الفهرس بعمق…');
+
+    var floor = new Promise(function (r) { setTimeout(r, 450); });
+    CS.catalog.deepSweep().then(function (added) {
+      return floor.then(function () { return added; });
+    }).then(function (added) {
+      paintIndexBtn();
+      renderCatalogState();
+      if (btn) btn.disabled = false;
+      CS.ui.toast(added > 0
+        ? '🚀 تحديث قوي: انضاف ' + added + ' عمل للفهرس'
+        : '🟡 الفهرس محدَّث — ما فيه جديد');
+    }).catch(function () {
+      paintIndexBtn();
+      if (btn) btn.disabled = false;
+      CS.ui.toast('🔴 ما قدرت أكمل التحديث القوي');
+    });
+  }
+
   function emptyFeedHtml() {
     var tab = currentTab();
     var name = titleFor(tab);
@@ -2112,6 +2142,9 @@
     $('#btn-save-settings').addEventListener('click', saveSettings);
     var idxBtn = $('#btn-index');
     if (idxBtn) idxBtn.addEventListener('click', function () { runSweep(true); });
+
+    var strongBtn = $('#btn-index-strong');
+    if (strongBtn) strongBtn.addEventListener('click', runDeepSweep);
 
     var sweepBtn = $('#btn-catalog-sweep');
     if (sweepBtn && CS.catalog) sweepBtn.addEventListener('click', function () {

@@ -238,9 +238,12 @@
                 mature: true, needsAdult: true, keywords: true, keywordGated: true,
                 kinds: ['tease', 'nudity'], includeAdult: false },
     /* «إباحي» وحده يفتح include_adult ويقبل الإباحي الفعلي */
+    /* «Explicit» سينما الجنس الصريح: أعمال سينمائية بمشاهد جنس حقيقي
+       (unsimulated sex · roman porno) — لا أفلام porn. لذلك ما نفتح
+       includeAdult، والصنف المقبول 'explicit' وحده. */
     explicit: { label: 'Explicit', min: 3, max: 5,
                 mature: true, needsAdult: true, keywords: true, keywordGated: true,
-                kinds: ['porn'], includeAdult: true }
+                kinds: ['explicit'], includeAdult: false }
   };
 
   /* مفاتيح أقسام قديمة محفوظة في متصفّح المستخدم — تُحوَّل بدل ما تسقط
@@ -431,7 +434,9 @@
      ------------------------------------------------------------ */
   var KIND = {
     porn:    { ar: 'إباحي', emoji: '⛔', color: '#e11d48',
-               why: 'جنس حقيقي غير تمثيلي — علم adult عند TMDB أو وسم إباحي صريح' },
+               why: 'جنس حقيقي غير تمثيلي — علم adult عند TMDB أو تصنيف R18 · ممنوع من الموقع كله' },
+    explicit:{ ar: 'صريح',  emoji: '🎬', color: '#a855f7',
+               why: 'سينما بجنس صريح غير تمثيلي (unsimulated sex · roman porno) — عمل سينمائي لا فيلم porn' },
     nudity:  { ar: 'تعري',  emoji: '🔥', color: '#f97316',
                why: 'عُري صريح — وسم nudity أو واصف رسمي من مجلس التصنيف' },
     tease:   { ar: 'إيحاء', emoji: '🌶️', color: '#ec4899',
@@ -443,7 +448,10 @@
   /* الأسماء الخام — heatOf يوحّد «porn star» و«pornography» في وسم
      واحد، فيصير فيلم عن صناعة الإباحية إباحيًا. النوع يُقرأ من
      الأسماء نفسها: ما يصنع «إباحيًا» إلا الجنس الحقيقي. */
-  var PORN_NAME = /^(pornography|porn|hardcore pornography|adult video|unsimulated sex|explicit sex|hentai)$/;
+  /* الإباحي وحده — الجنس الصريح داخل عمل سينمائي له وسمه الخاص تحت،
+     وكان مخلوطًا هنا فيُصنَّف porn ويُحال إلى قسم الإباحي. */
+  var PORN_NAME = /^(pornography|porn|hardcore pornography|adult video|hentai)$/;
+  var EXPLICIT_NAME = /^(unsimulated sex|explicit sex|sex scene|roman porno|pinku eiga)$/;
   var NUDE_NAME = /^(nudity|female nudity|male nudity|topless|nude|full frontal nudity|frontal nudity)$/;
   var TEASE_NAME = /^(erotic|erotica|eroticism|erotic movie|erotic film|erotic cinema|erotic thriller|erotic drama|erotic romance|erotic comedy|softcore|soft core|sexploitation|nunsploitation|nudie|sensual|sensuality|steamy|sex|sexual|sexuality|sex scene|sex comedy|women in prison|bdsm|fetish|prostitution|striptease|seduction|porn star|porn actress|adult filmmaking|adult film|adult movie)$/;
 
@@ -462,6 +470,7 @@
     var names = (heat.names || []).map(function (t) { return String(t).trim().toLowerCase(); });
     if (!names.length) return null;
     if (names.some(function (t) { return PORN_NAME.test(t); })) return 'porn';
+    if (names.some(function (t) { return EXPLICIT_NAME.test(t); })) return 'explicit';
     if (names.some(function (t) { return NUDE_NAME.test(t); })) return 'nudity';
     if (names.some(function (t) { return TEASE_NAME.test(t); })) return 'tease';
     return 'none';
@@ -587,10 +596,17 @@
     /* نتيجة ويكيبيديا بلا مقابل في TMDB ما نقدر نتحقق منها — تُمنع */
     if (item.source !== 'tmdb') return false;
 
-    if (item.adult) return true;
+    /* الإباحي الصريح ممنوع من الموقع كله: قسم Explicit صار لسينما
+       الجنس الصريح لا لأفلام porn، فوسم adult أو تصنيف R18 يُسقط العمل. */
+    if (item.adult) return false;
 
     var info = cachedFor(item);
-    if (info && info.tier === 5) return true;
+    if (info && info.tier === 5) return false;
+
+    /* ونفس المنع بوسوم TMDB: عمل موسوم pornography أو adult video
+       ما يُعرض في أي قسم مهما كان. */
+    var hard = cachedHeat(item);
+    if (hard && hard.names && hard.names.some(function (t) { return PORN_NAME.test(String(t).trim().toLowerCase()); })) return false;
     /* نقض بالتصنيف: عمل تصنيفه الرسمي +13 فما تحت ما هو محتوى
        جنسي مهما قالت وسومه — الوسم غلط لا العمل. السينما الجنسية
        الحقيقية إما بلا تصنيف أو R فما فوق، فالنقض ما يقص منها شيئًا.

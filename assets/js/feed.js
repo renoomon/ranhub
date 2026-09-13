@@ -38,9 +38,12 @@
     'full frontal nudity', 'male nudity', 'softcore', 'sexploitation'
   ];
 
+  /* سينما الجنس الصريح — أعمال سينمائية بمشاهد جنس حقيقي، لا أفلام porn.
+     الأسماء مُتحقَّق منها من TMDB: unsimulated sex (282903) ·
+     roman porno (348517) · sex scene (354470). */
   var EXPLICIT_WORDS = [
-    'pornography', 'hardcore', 'unsimulated sex', 'explicit sex',
-    'adult video', 'adult film', 'porn'
+    'unsimulated sex', 'roman porno', 'sex scene',
+    'pinku eiga', 'erotic film'
   ];
 
   var SECTIONS = {
@@ -52,7 +55,7 @@
     /* إباحي — جنس حقيقي غير تمثيلي. البذرة الوحيدة المؤكَّدة هي
        «pornography»، والباقي يأتي من علم adult عند TMDB — وهذا
        القسم وحده يطلبه. */
-    explicit: { seed: [445], words: EXPLICIT_WORDS },
+    explicit: { seed: [282903, 348517, 354470], words: EXPLICIT_WORDS },
     /* توصيتي — ما ينبني من الكلمات، ينبني من أعمالك اللي عجبتك */
     foryou:   { seed: [], words: [], fromTaste: true }
   };
@@ -62,8 +65,9 @@
   /* أسماء البذور المؤكَّدة — من استجابات TMDB حقيقية */
   var SEED_NAMES = {
     190370: 'erotic movie', 155477: 'softcore', 10053: 'sexploitation',
-    445: 'pornography', 281741: 'nudity', 267122: 'sex', 339680: 'female nudity',
-    7344: 'porn star', 158436: 'porn actress', 195997: 'adult filmmaking'
+    281741: 'nudity', 267122: 'sex', 339680: 'female nudity',
+    7344: 'porn star', 158436: 'porn actress', 195997: 'adult filmmaking',
+    282903: 'unsimulated sex', 348517: 'roman porno', 354470: 'sex scene'
   };
 
   function sectionFor(tab) { return SECTIONS[tab] ? tab : DEFAULT_SECTION; }

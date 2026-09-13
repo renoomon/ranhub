@@ -138,6 +138,11 @@
     add('Wikidata',
       'https://www.wikidata.org/w/index.php?search=' + enc(name), '#339966');
 
+    /* كتالوج مجاني: أفلام محفوظة للعامة على Internet Archive */
+    add('Internet Archive',
+      'https://archive.org/search?query=' + enc(name + (it.year ? ' ' + it.year : '')) + '&and[]=mediatype%3A%22movies%22',
+      '#6b7280');
+
     /* ---------- مشاهدة وبحث ---------- */
 
     /* ستريميو: التطبيق يلتقط stremio:// والويب بديل مضمون */
