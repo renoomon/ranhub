@@ -231,6 +231,10 @@
   function titleFor(tab) { return tabConf(tab).title; }
 
   var feedBusy = false;
+  /* كل تبديل قسم يُبطل التحميل الطائر بدل ما يُسقط الجديد: بدون هذا
+     كان loadFeed يرد فورًا لأن القسم السابق ما خلّص، فيبقى القسم
+     الجديد على هياكله بلا أي إعادة محاولة. */
+  var feedGen = 0;
 
   function currentTab() {
     var el = $('.tab.is-active');
@@ -270,6 +274,11 @@
     CS.store.set(CS.KEYS.tab, tab);
     autoRounds = 0;
 
+    /* القسم الجديد يسبق أي طلب قديم: نُبطل الجيل السابق ونحرّر القفل
+       كي لا يسقط تحميل هذا القسم، والرد القديم يُتجاهل عند وصوله. */
+    feedGen++;
+    feedBusy = false;
+
     $('#feed-title').textContent = titleFor(tab);
 
     CS.feed.reset({
@@ -299,10 +308,12 @@
   function loadFeed(first) {
     if (feedBusy) return;
     feedBusy = true;
+    var gen = feedGen;
     var btn = $('#btn-feed-more');
     if (btn) { btn.disabled = true; btn.textContent = '⏳ يحمّل…'; }
 
     CS.feed.loadMore().then(function (res) {
+      if (gen !== feedGen) return;
       if (CS.state.view !== 'home') { feedBusy = false; return; }
 
       var items = res.items;
@@ -316,11 +327,13 @@
       /* حدّ ثابت لكل جولة: items تكبر مع كل جولة، فسحب وسوم القائمة
          كلها في كل مرة كان يعيد حساب ما عرفناه ويضاعف الطلبات */
       return ensureHeat(items, 70).then(function () {
+        if (gen !== feedGen) return;
         feedBusy = false;
         if (CS.state.view !== 'home') return;
         paintFeed(items, res, first, btn);
       });
     }).catch(function (err) {
+      if (gen !== feedGen) return;
       feedBusy = false;
       if (btn) { btn.disabled = false; btn.textContent = 'اعرض المزيد'; }
       if (CS.state.view !== 'home') return;
