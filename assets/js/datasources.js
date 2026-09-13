@@ -278,7 +278,11 @@
     var p = src.preset ? preset(src.preset) : null;
     var url = String(src.url || (p && p.url) || '').trim();
     if (!url) throw new Error('NO_URL');
-    if (!/^https?:\/\//i.test(url)) throw new Error('BAD_URL');
+    /* https حصرًا: javascript: وdata: مرفوضان صراحةً، وhttp على صفحة
+       https يحجبه المتصفّح كمحتوى مختلط فيفشل بلا سبب ظاهر للمستخدم */
+    if (/^(javascript|data|vbscript|file|blob):/i.test(url)) throw new Error('BAD_SCHEME');
+    if (!/^https:\/\//i.test(url)) throw new Error('BAD_URL');
+    if (url.length > 600) throw new Error('LONG_URL');
 
     var guess = p || presetFromUrl(url);
 
@@ -363,33 +367,40 @@
     return attempt(url, src, alt);
   }
 
-  /* بعض الخدمات لها مساران للشي نفسه — نجرّب الثاني قبل ما نعلن الفشل */
+  /* بعض الخدمات لها مساران للشي نفسه — نجرّب الثاني قبل ما نعلن الفشل.
+     كل النداءات تمرّ من CS.net: نفس الرابط ما يُطلب مرتين في الجلسة،
+     وكان المزوّد الواحد يُنادى مرتين لنفس العمل (مرة من هنا ومرة من
+     sources.js) فيحرق ضعف الحصّة اليومية. */
   function attempt(url, src, alt) {
-    return fetch(url, { headers: headersFor(src) })
-      .then(function (r) {
-        if (!r.ok) {
+    return CS.net.json(url, {
+      headers: headersFor(src),
+      persist: true,
+      ttl: 12 * 3600 * 1000,
+      retries: 1
+    })
+      .then(function (j) {
+        var p = preset(src.preset);
+        if (p && p.ok && !p.ok(j)) {
           if (alt) return attempt(alt, src, '');
-          return { ok: false, rows: [], detail: 'رد بخطأ ' + r.status };
+          return { ok: false, rows: [], detail: p.err ? p.err(j) : 'رد بلا بيانات' };
         }
-        return r.json().then(function (j) {
-          var p = preset(src.preset);
-          if (p && p.ok && !p.ok(j)) {
-            if (alt) return attempt(alt, src, '');
-            return { ok: false, rows: [], detail: p.err ? p.err(j) : 'رد بلا بيانات' };
-          }
-          var rows = p && p.pick ? p.pick(j) : flatten(j);
-          rows = (rows || []).filter(function (r2) {
-            return r2 && r2[1] !== undefined && r2[1] !== null && String(r2[1]).trim() !== '' && String(r2[1]) !== '0';
-          });
-          /* بعض المزوّدين يعطون صورًا تستفيد منها الواجهة لا مجرد أرقام تُعرض */
-          var art = p && p.art ? p.art(j) : null;
-          return { ok: true, rows: rows, art: art,
-                   detail: rows.length ? '' : 'رد بنجاح بلا حقول معروضة' };
+        var rows = p && p.pick ? p.pick(j) : flatten(j);
+        rows = (rows || []).filter(function (r2) {
+          return r2 && r2[1] !== undefined && r2[1] !== null && String(r2[1]).trim() !== '' && String(r2[1]) !== '0';
         });
+        /* بعض المزوّدين يعطون صورًا تستفيد منها الواجهة لا مجرد أرقام تُعرض */
+        var art = p && p.art ? p.art(j) : null;
+        return { ok: true, rows: rows, art: art,
+                 detail: rows.length ? '' : 'رد بنجاح بلا حقول معروضة' };
       })
       .catch(function (e) {
         if (alt) return attempt(alt, src, '');
-        return { ok: false, rows: [], detail: netMsg(e) };
+        var m = (e && e.message) || '';
+        return { ok: false, rows: [],
+                 detail: /^HTTP_/.test(m) ? 'رد بخطأ ' + m.replace('HTTP_', '')
+                       : m === 'BAD_KEY' ? 'المفتاح مرفوض (401)'
+                       : m === 'RATE_LIMIT' ? 'تجاوز حد الطلبات (429)'
+                       : netMsg(e) };
       });
   }
 

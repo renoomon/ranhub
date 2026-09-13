@@ -34,7 +34,23 @@
 
     var wa = a.split(' '), wb = b.split(' ');
     var hit = wa.filter(function (w) { return w.length > 2 && wb.indexOf(w) !== -1; }).length;
-    return hit ? Math.min(.7, hit / Math.max(wa.length, wb.length)) : 0;
+    if (hit) return Math.min(.7, hit / Math.max(wa.length, wb.length));
+
+    /* بلا كلمة مشتركة: نجرّب القرب الإملائي — «إنسبشن» و«انسبشن»،
+       و«interstellar» و«intersteller». كانت ترجع صفرًا فتضيع النتيجة
+       الصحيحة كليًا لمجرد حرف واحد. */
+    if (CS.fuzzy) {
+      var f = CS.fuzzy.similar(a, b);
+      if (f >= 0.72) return Math.min(.72, f * 0.8);
+      /* جملة مقابل جملة: نطابق كلمة بكلمة تقريبيًا */
+      if (wa.length > 1 || wb.length > 1) {
+        var near = wa.filter(function (w) {
+          return w.length > 3 && wb.some(function (v) { return CS.fuzzy.near(w, v); });
+        }).length;
+        if (near) return Math.min(.6, near / Math.max(wa.length, wb.length));
+      }
+    }
+    return 0;
   }
 
   /* ---------- نية الاستعلام ---------- */
@@ -56,7 +72,10 @@
      البوابة تُغلق عند الجهل لا تُفتح.
      ------------------------------------------------------------ */
 
-  var GATE_CAP = 72;      /* كم مرشّحًا نسحب وسومه قبل الحكم */
+  /* كم مرشّحًا نسحب وسومه قبل الحكم. كان ٧٢ — أي ٧٢ طلبًا إضافيًا
+     لكل بحث. ذاكرة الوسوم صارت تُحفظ على القرص في net.js فأغلبها
+     يُخدَم بلا شبكة، والباقي يكفيه عدد أصغر بكثير. */
+  var GATE_CAP = 34;
 
   function gate(items, meta) {
     var list = (items || []).filter(Boolean);
@@ -94,17 +113,24 @@
     if (!CS.catalog || !CS.catalog.size()) return [];
 
     /* المصطلحات: العربية كما هي (الفهرس فيه ملخّصات عربية كمان)،
-       والإنجليزية من الترجمة، وإن سقطت الترجمة فمن المعجم. */
+       والإنجليزية من الترجمة، ومن المعجم دائمًا.
+
+       كانت الترجمة تُلغي المعجم (else if)، فأي ترجمة رديئة — والخدمة
+       المجانية ترجع رديئًا كثيرًا — تقتل البحث العربي بالكامل: نفس
+       الاستعلام يرجّع صفر نتيجة والترجمة شغّالة، وأربع نتائج صحيحة
+       والترجمة واقفة. الآن الاثنان يجتمعان. */
     var terms = contentWords(q);
     if (qEn && qEn !== q) terms = terms.concat(contentWords(qEn));
-    else if (CS.util.isArabic(q)) {
+    if (CS.util.isArabic(q)) {
       var lex = lexTranslate(q);
       if (lex.length) {
         terms = terms.concat(lex);
-        if (meta) meta.lexFallback = lex.length;
+        if (meta) meta.lexTerms = lex.length;
       }
     }
     terms = terms.filter(function (t, i, a) { return a.indexOf(t) === i; });
+    /* التصحيح الإملائي يضيف صورًا ولا يستبدل الأصل */
+    terms = correctedWords(terms, meta);
     if (!terms.length) return [];
 
     var hits = CS.catalog.search(terms, { phrase: qEn || q, limit: 60 });
@@ -375,6 +401,33 @@
   }
 
   /* ------------------------------------------------------------
+     تصحيح الأخطاء الإملائية.
+     المفردات من الفهرس نفسه: عناوين الأعمال ووسومها. فالتصحيح ما
+     يحزر من قاموس عام، بل من الكلمات الموجودة فعلًا في كتالوجنا —
+     «اروتك» ← «erotic» ما تصير إلا لو الفهرس فيه erotic أصلًا.
+     ------------------------------------------------------------ */
+  function correctedWords(words, meta) {
+    if (!CS.fuzzy || !CS.catalog || !CS.catalog.size()) return words;
+    var vocab = CS.catalog.vocabulary();
+    if (!vocab.length) return words;
+
+    var out = words.slice();
+    var fixes = [];
+    words.forEach(function (w) {
+      if (w.length < 4) return;
+      var n = CS.fuzzy.norm(w);
+      /* موجودة حرفيًا في المفردات؟ ما تحتاج تصحيحًا */
+      if (vocab.indexOf(n) !== -1) return;
+      var fix = CS.fuzzy.correct(w, vocab, { min: 0.78 });
+      if (!fix || CS.fuzzy.norm(fix.word) === n) return;
+      if (out.indexOf(fix.word) === -1) out.push(fix.word);
+      fixes.push({ from: w, to: fix.word });
+    });
+    if (fixes.length && meta) meta.corrections = fixes;
+    return out;
+  }
+
+  /* ------------------------------------------------------------
      معجم وصف مصغّر عربي ← إنجليزي.
      ملخّصات TMDB لهذي الأعمال إنجليزية في الغالب، والترجمة الحيّة
      قد تسقط (شبكة، حد استخدام، خدمة مقفلة). بدونها كان الوصف
@@ -413,6 +466,22 @@
     'عري':'nudity','تعري':'nudity','جنس':'sex','جنسي':'erotic','اثاره':'erotic',
     'حسي':'sensual','مثير':'steamy','خيال':'fantasy','رعب':'horror','غموض':'mystery'
   };
+
+  /**
+   * هل هذي ترجمة صالحة نبني عليها؟
+   * ترفض: الفاضية · نفس النص · اللي ما زال فيها حروف عربية ·
+   * اللي طولها غير معقول مقابل الأصل.
+   */
+  function usableTranslation(en, src) {
+    if (!en) return false;
+    var t = String(en).trim();
+    if (!t || t === String(src).trim()) return false;
+    if (CS.util.isArabic(t)) return false;
+    if (/^[\s\d\W]+$/.test(t)) return false;
+    var ratio = t.length / Math.max(1, String(src).length);
+    if (ratio < 0.25 || ratio > 6) return false;
+    return true;
+  }
 
   /* ترجمة كلمة بكلمة للوصف — بديل احتياطي لا أكثر */
   function lexTranslate(q) {
@@ -608,6 +677,107 @@
     }).catch(function () { return []; });
   }
 
+  /* ------------------------------------------------------------
+     محرك ٥: الأشخاص — اسم ممثل أو مخرج يجيب أعماله.
+     كان الحقل item.viaPerson مستعملًا في الترتيب وما فيه محرّك
+     يملؤه أصلًا، فالبحث باسم شخص كان يرجّع لا شي.
+     ------------------------------------------------------------ */
+  function enginePeople(q, qEn) {
+    if (!CS.hasKey()) return Promise.resolve([]);
+    var words = CS.util.words(q);
+    /* اسم الشخص عادةً كلمة أو كلمتان — الجملة الطويلة وصف لا اسم */
+    if (words.length > 4) return Promise.resolve([]);
+
+    var probes = [q];
+    if (qEn && qEn !== q) probes.push(qEn);
+
+    return CS.util.pool(probes, 2, function (t) {
+      return CS.tmdb.searchPeople(t).catch(function () { return []; });
+    }).then(function (sets) {
+      /* pool يرجّع مصفوفة مصفوفات — بلا تسطيح كان p.id غير معرَّف
+         فيسقط المحرّك كله بصمت والبحث باسم شخص يرجّع صفرًا */
+      var people = [];
+      (sets || []).forEach(function (l) { people = people.concat(l || []); });
+
+      var seen = {}, top = [];
+      people.forEach(function (p) {
+        if (!p || p.id == null) return;
+        if (!p || seen[p.id]) return;
+        /* لازم الاسم يشبه المكتوب فعلًا — لا نأخذ أول نتيجة */
+        var sim = Math.max(similarity(p.name, q), qEn ? similarity(p.name, qEn) : 0);
+        if (sim < 0.6) return;
+        seen[p.id] = true;
+        p.sim = sim;
+        top.push(p);
+      });
+      top.sort(function (a, b) { return b.sim - a.sim; });
+      top = top.slice(0, 2);
+      if (!top.length) return [];
+
+      return CS.util.pool(top, 2, function (p) {
+        return CS.tmdb.person(p.id).then(function (full) {
+          return (full.works || []).slice(0, 24).map(function (w) {
+            w.why = 'person';
+            w.viaPerson = full.name;
+            w.whyText = 'من أعمال ' + full.name;
+            w.engineScore = 30 + p.sim * 24;
+            return w;
+          });
+        }).catch(function () { return []; });
+      }).then(function (sets) {
+        var out = [];
+        sets.forEach(function (l) { out = out.concat(l || []); });
+        return out;
+      });
+    }).catch(function () { return []; });
+  }
+
+  /* ------------------------------------------------------------
+     محرك ٦: التصنيفات — نص البحث يطابق اسم تصنيف في الموقع.
+     يربط أزرار التصنيفات بمحرّك البحث: «bdsm» أو «نونسبلويتيشن»
+     تجيب نفس ما يجيبه الزرّ، لا نتائج عنوان عشوائية.
+     ------------------------------------------------------------ */
+  function engineCategory(q, qEn, meta) {
+    if (!CS.hasKey() || !CS.feed) return Promise.resolve([]);
+    var cats = CS.feed.allCategories();
+    if (!cats.length) return Promise.resolve([]);
+
+    var probe = norm(qEn || q);
+    var hits = [];
+    cats.forEach(function (c) {
+      var name = norm(c.name);
+      var sim = name === probe ? 1
+              : (probe.indexOf(name) !== -1 && name.length >= 4) ? 0.9
+              : (CS.fuzzy ? CS.fuzzy.similar(name, probe) : 0);
+      if (sim >= 0.82) hits.push({ cat: c, sim: sim });
+    });
+    if (!hits.length) return Promise.resolve([]);
+    hits.sort(function (a, b) { return b.sim - a.sim; });
+    hits = hits.slice(0, 2);
+    if (meta) meta.categories = hits.map(function (h) { return h.cat.name; });
+
+    return CS.util.pool(hits, 2, function (h) {
+      return Promise.all([
+        CS.tmdb.discover('movie', { with_keywords: String(h.cat.id) }, 1),
+        CS.tmdb.discover('tv', { with_keywords: String(h.cat.id) }, 1)
+      ]).then(function (r) {
+        var list = (r[0] || []).concat(r[1] || []);
+        list.forEach(function (it) {
+          if (CS.certs.seedKeyword) CS.certs.seedKeyword(it, h.cat.name.toLowerCase());
+          it.why = 'theme';
+          it.hits = [h.cat.name];
+          it.whyText = 'تصنيف: ' + h.cat.name;
+          it.engineScore = 40 + h.sim * 30;
+        });
+        return list;
+      }).catch(function () { return []; });
+    }).then(function (sets) {
+      var out = [];
+      sets.forEach(function (l) { out = out.concat(l || []); });
+      return out;
+    });
+  }
+
   function relatedTo(top) {
     if (!CS.hasKey() || !top || top.source !== 'tmdb') return Promise.resolve([]);
 
@@ -648,10 +818,14 @@
     };
 
     /* نترجم للإنجليزي: ملخّصات TMDB وكلماته المفتاحية وويكيبيديا
-       الإنجليزية كلها إنجليزية، والوصف العربي ما يطابقها بدون ترجمة */
+       الإنجليزية كلها إنجليزية، والوصف العربي ما يطابقها بدون ترجمة.
+       لكن الترجمة تُفحص قبل ما نعتمد عليها — الخدمة المجانية ترجّع
+       أحيانًا النص نفسه أو نصًا فيه عربي، وكنا نبني عليه فيضيع البحث. */
     var prep = isAr ? CS.wiki.toEnglish(q) : Promise.resolve(q);
 
-    return prep.then(function (qEn) {
+    return prep.then(function (raw) {
+      var qEn = usableTranslation(raw, q) ? raw : '';
+      if (!qEn && isAr && raw) meta.translationRejected = true;
       if (qEn && qEn !== q) meta.translated = qEn;
 
       var tagOnly   = mode === 'theme';
@@ -670,7 +844,18 @@
         );
       }
 
-      /* ١) الفهرس المحلي — فوري، بلا طلب، ومقصور على كتالوج الكبار */
+      /* ١) الفهرس المحلي — فوري، بلا طلب، ومقصور على كتالوج الموقع.
+         البحث بالوصف *هو* الفهرس: بفهرس فاضٍ (أول زيارة) يرجّع
+         صفرًا مهما كان الوصف دقيقًا. فقبل أي بحث وصفي على فهرس
+         صغير نوسّعه توسيعًا محدودًا وننتظره — مرة واحدة. */
+      var warmUp = Promise.resolve();
+      if (!tagOnly && (intent === 'plot' || intent === 'mixed') &&
+          CS.catalog && CS.catalog.size() < 150 && CS.hasKey()) {
+        meta.warmedIndex = true;
+        warmUp = CS.catalog.sweep(true).catch(function () {});
+      }
+
+      return warmUp.then(function () {
       if (!tagOnly) {
         var local = engineCatalog(q, qEn, meta);
         if (local.length) { meta.engines.push('catalog'); meta.catalogHits = local.length; }
@@ -682,12 +867,20 @@
       if (wantPlot)  { meta.engines.push('plot');  jobs.push(enginePlot(q, qEn, false)); }
       if (wantTheme) { meta.engines.push('theme'); jobs.push(engineTheme(q, qEn, tagOnly || intent === 'plot')); }
 
-      /* ٤) كتالوجات مجانية: توسّع الاكتشاف لما بحث TMDB يقصّر */
+      /* ٤) التصنيفات: نص البحث قد يكون اسم تصنيف في الموقع */
+      meta.engines.push('category');
+      jobs.push(engineCategory(q, qEn, meta));
+
+      /* ٥) الأشخاص: اسم ممثل أو مخرج يجيب أعماله */
+      if (!tagOnly && intent !== 'plot') { meta.engines.push('person'); jobs.push(enginePeople(q, qEn)); }
+
+      /* ٦) كتالوجات مجانية: توسّع الاكتشاف لما بحث TMDB يقصّر */
       if (CS.freeCatalog) { meta.engines.push('free'); jobs.push(engineFree(q, qEn)); }
 
       return Promise.all(jobs.map(function (p) {
         return Promise.resolve(p).catch(function () { return []; });
       })).then(function (sets) { return { sets: sets, qEn: qEn }; });
+      });
 
     }).then(function (bag) {
       var sets = bag.sets;
@@ -714,12 +907,18 @@
       /* حصص لكل محرّك قبل البوابة: البوابة تسحب وسوم ٧٢ مرشّحًا فقط،
          ومحرّك الثيمة وحده يقدر يرمي ١٢٠ عملًا عامًا فيبتلع الحصّة
          ويجوّع المطابقات الحقيقية. الفهرس أولًا لأنه كتالوج كبار أصلًا. */
-      var QUOTA = { catalog: 60, plot: 24, theme: 26, title: 12 };
+      var QUOTA = { catalog: 60, plot: 24, theme: 26, title: 14, category: 30, person: 20, wiki: 10 };
       var used = {};
       var raw = [];
       sets.forEach(function (l) {
-        (l || []).forEach(function (x) {
-          if (!x) return;
+        /* الحصّة تُقصّ بالأقوى لا بترتيب الوصول.
+           كان القصّ يأخذ أول ١٤ نتيجة عنوان بترتيب TMDB (الشهرة)،
+           فالتطابق التام لعمل غير مشهور يسقط قبل ما يصل البوابة —
+           تبحث باسم العمل حرفيًا فما يظهر. */
+        var sorted = (l || []).filter(Boolean).slice().sort(function (a, b) {
+          return (b.engineScore || 0) - (a.engineScore || 0);
+        });
+        sorted.forEach(function (x) {
           var w = x.why || 'other';
           var cap = QUOTA[w];
           if (cap !== undefined) {
@@ -745,16 +944,23 @@
         var top = items[0];
         if (!top) return { items: items, meta: meta };
 
-        /* ٤) الأعمال ذات الصلة بأفضل نتيجة — وتمرّ من نفس البوابة */
+        /* ٤) الأعمال ذات الصلة بأفضل نتيجة — قسم منفصل لا نتائج بحث.
+           كانت تُدمج في نفس الشبكة، فبحث باسم عمل واحد يرجّع ٢٣
+           بطاقة عشرون منها «قريبة من النتيجة الأولى» لا من بحثك —
+           يعني دقّة ٤٪ على استعلام إجابته واحدة معروفة. */
         return relatedTo(top).then(function (rel) {
           if (!rel.length) return { items: items, meta: meta };
           return gate(rel, null).then(function (relClean) {
             if (!relClean.length) return { items: items, meta: meta };
-            var all = merge([items, relClean]);
-            meta.related = relClean.length;
-            meta.relatedOf = top.title;
+            var have = {};
+            items.forEach(function (x) { have[x.type + ':' + x.id] = true; });
+            var extra = relClean.filter(function (x) { return !have[x.type + ':' + x.id]; });
             if (CS.catalog) CS.catalog.add(relClean);
-            return { items: all, meta: meta };
+            if (!extra.length) return { items: items, meta: meta };
+            meta.related = extra.length;
+            meta.relatedOf = top.title;
+            meta.relatedItems = CS.reco ? CS.reco.rank(top, extra, {}).slice(0, 24) : extra.slice(0, 24);
+            return { items: items, meta: meta };
           });
         });
       });
@@ -766,19 +972,36 @@
   /* الاقتراحات الفورية تمرّ من البوابة كمان — كانت تقترح أعمالًا
      عامة تحت خانة بحث موقع كله محتوى واحد. الفهرس المحلي يجاوب
      أولًا بلا أي طلب، وTMDB يكمّل ما نقص. */
-  function suggest(q) {
-    var local = CS.catalog
-      ? CS.catalog.search(contentWords(q), { phrase: q, limit: LIM.suggest * 3 })
-      : [];
+  /**
+   * suggest(q, onPartial) — اقتراحات فورية أثناء الكتابة.
+   *
+   * على مرحلتين عمدًا: الفهرس المحلي يجاوب فورًا بلا أي طلب (وهذا
+   * اللي يخلّي الاقتراح يظهر وأنت تكتب)، ثم TMDB يكمّل. الاقتراح
+   * كان ينتظر عشر طلبات وسوم قبل أول ظهور، فيوصل بعد ما تخلّص كتابة.
+   *
+   * كل النتائج تمرّ من بوابة المحتوى — الاقتراح ما يعرض عملًا عامًا.
+   */
+  function suggest(q, onPartial) {
+    var words = contentWords(q);
+    var local = CS.catalog ? CS.catalog.search(words, { phrase: q, limit: LIM.suggest * 3 }) : [];
     var ready = local.filter(function (it) { return CS.certs.isAdultWork(it) === true; });
-    if (ready.length >= LIM.suggest || !CS.hasKey()) {
-      return Promise.resolve(ready.slice(0, LIM.suggest));
+
+    var quick = {
+      items: ready.slice(0, LIM.suggest),
+      categories: matchingCategories(q, 3),
+      history: matchingHistory(q, 2)
+    };
+    if (onPartial && (quick.items.length || quick.categories.length || quick.history.length)) {
+      try { onPartial(quick); } catch (e) { /* الواجهة مسؤولة عن نفسها */ }
     }
+
+    if (ready.length >= LIM.suggest || !CS.hasKey()) return Promise.resolve(quick);
 
     return CS.tmdb.searchMulti(q)
       .then(function (r) {
-        var cands = (r.items || []).filter(function (i) { return !i.viaPerson; }).slice(0, 14);
-        var need = cands.filter(function (it) { return CS.certs.isAdultWork(it) === null; }).slice(0, 10);
+        var cands = (r.items || []).slice(0, 12);
+        /* ستة فقط — البوابة تكلّف طلبًا لكل عمل، والاقتراح لازم يكون فوريًا */
+        var need = cands.filter(function (it) { return CS.certs.isAdultWork(it) === null; }).slice(0, 6);
         return CS.util.pool(need, 6, function (it) {
           return CS.certs.fetchHeat(it).catch(function () { return null; });
         }).then(function () {
@@ -787,12 +1010,39 @@
           cands.forEach(function (it) {
             if (seen[it.type + ':' + it.id]) return;
             if (CS.certs.isAdultWork(it) !== true) return;
+            seen[it.type + ':' + it.id] = true;
             ready.push(it);
           });
-          return ready.slice(0, LIM.suggest);
+          quick.items = ready.slice(0, LIM.suggest);
+          return quick;
         });
       })
-      .catch(function () { return ready.slice(0, LIM.suggest); });
+      .catch(function () { return quick; });
+  }
+
+  /* تصنيفات الموقع اللي يشبهها المكتوب — اقتراح فوري بلا أي طلب */
+  function matchingCategories(q, cap) {
+    if (!CS.feed || !CS.feed.allCategories) return [];
+    var probe = norm(q);
+    if (probe.length < 2) return [];
+    var out = [];
+    CS.feed.allCategories().forEach(function (c) {
+      if (out.length >= (cap || 3)) return;
+      var name = norm(c.name);
+      var ok = name.indexOf(probe) === 0 || name.indexOf(probe) !== -1 ||
+               (CS.fuzzy && probe.length >= 4 && CS.fuzzy.similar(name, probe) >= 0.8);
+      if (ok) out.push(c);
+    });
+    return out;
+  }
+
+  function matchingHistory(q, cap) {
+    var probe = norm(q);
+    if (probe.length < 2) return [];
+    return CS.history.all().filter(function (h) {
+      var n = norm(h);
+      return n !== probe && n.indexOf(probe) !== -1;
+    }).slice(0, cap || 2);
   }
 
   /* ============================================================
@@ -823,6 +1073,9 @@
     suggest: suggest,
     detectIntent: detectIntent,
     similarity: similarity,
+    contentWords: contentWords,
+    correctedWords: correctedWords,
+    matchingCategories: matchingCategories,
     norm: norm
   };
 

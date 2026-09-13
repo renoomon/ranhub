@@ -9,6 +9,40 @@
   function enc(s) { return encodeURIComponent(String(s || '').trim()); }
 
   /* ------------------------------------------------------------
+     تفضيلات المشاهدة.
+
+     كن صريحًا: هذا الموقع دليل لا مشغّل — ما فيه فيديو يُشغَّل هنا
+     عشان نضبط جودته أو صوته. المصادر المجانية تعطي بيانات الأعمال
+     لا ملفاتها. فاللي نقدر نسويه فعلًا: نحمل تفضيلاتك إلى الروابط
+     اللي نفتحها لك (بحث بالجودة واللغة)، والتطبيقات اللي تفتحها
+     تتكفّل بالباقي.
+     ------------------------------------------------------------ */
+  var PREF_DEFAULT = { quality: '', subs: 'ar', audio: 'original' };
+
+  function prefs() {
+    var p = CS.store.get(CS.KEYS.viewPrefs, null);
+    if (!p || typeof p !== 'object') return Object.assign({}, PREF_DEFAULT);
+    return Object.assign({}, PREF_DEFAULT, p);
+  }
+
+  function setPrefs(patch) {
+    var p = Object.assign(prefs(), patch || {});
+    CS.store.set(CS.KEYS.viewPrefs, p);
+    return p;
+  }
+
+  /* كلمات التفضيل اللي تُضاف لاستعلامات البحث الخارجية */
+  function prefTerms() {
+    var p = prefs();
+    var bits = [];
+    if (p.quality) bits.push(p.quality);
+    if (p.subs === 'ar') bits.push('مترجم');
+    else if (p.subs === 'en') bits.push('english subtitles');
+    if (p.audio === 'dubbed') bits.push('مدبلج');
+    return bits.join(' ');
+  }
+
+  /* ------------------------------------------------------------
      Nuvio — رابط يفتح التطبيق المثبَّت مباشرة لا صفحة ويب.
      الصيغة من DeepLinkParser في مستودع Nuvio نفسه:
        nuvio://meta?type=movie|series&id=tt…      ← معرّف IMDb
@@ -149,9 +183,10 @@
     add('Stremio',
       'https://web.stremio.com/#/search?search=' + enc(name), '#7b5bf5');
 
-    /* Yandex: الصيغة اللي طلبها — الاسم + السنة + online */
+    /* Yandex: الاسم + السنة + online، ومعها تفضيلات مشاهدتك */
+    var pt = prefTerms();
     add('Yandex',
-      'https://yandex.com/search/?text=' + enc(name + ' ' + (it.year || '') + ' online'),
+      'https://yandex.com/search/?text=' + enc(name + ' ' + (it.year || '') + ' online' + (pt ? ' ' + pt : '')),
       '#fc3f1d');
 
     /* ---------- بحث عام ---------- */
@@ -159,7 +194,8 @@
     if (it.homepage) add('الموقع الرسمي', it.homepage, '#e6b455', true);
 
     add('بحث Google',
-      'https://www.google.com/search?q=' + enc(q + (isMovie ? ' فيلم' : ' مسلسل')), '#4285f4');
+      'https://www.google.com/search?q=' + enc(q + (isMovie ? ' فيلم' : ' مسلسل') + (pt ? ' ' + pt : '')),
+      '#4285f4');
 
     return links;
   }
@@ -171,6 +207,7 @@
     });
   }
 
-  CS.links = { build: build, quick: quick, nuvio: nuvio };
+  CS.links = { build: build, quick: quick, nuvio: nuvio,
+               prefs: prefs, setPrefs: setPrefs, prefTerms: prefTerms };
 
 })(window.CS);

@@ -1,22 +1,23 @@
 /* ============================================================
-   sources.js — مصادر بيانات إضافية غير TMDB وويكيبيديا
+   sources.js — مصادر بيانات إضافية غير TMDB
    • TVmaze  : مجاني تمامًا بدون مفتاح — حلقات ومواعيد المسلسلات
-   • OMDb    : تقييمات IMDb وروتن توميتوز وميتاكريتك — يحتاج مفتاح مجاني
+   • OMDb    : تقييمات IMDb وروتن توميتوز وميتاكريتك — يحتاج مفتاحًا مجانيًا
    • Wikidata: مجاني ومفتوح — معرّفات المواقع الأخرى (روابط مباشرة)
-   كلها اختيارية: لو فشل أي مصدر، الصفحة تكمل عادي بدونه.
+
+   كلها اختيارية ومربوطة بسجلّ CS.contentSources: المطفأ ما يُنادى،
+   والساقط يُكتم مؤقتًا، والصفحة تكمل بدونه بلا أي خطأ في وجه المستخدم.
    ============================================================ */
 
 (function (CS) {
   'use strict';
 
-  var cache = {};
-
-  function getJSON(url) {
-    if (cache[url] !== undefined) return Promise.resolve(cache[url]);
-    return fetch(url)
-      .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (j) { cache[url] = j; return j; })
-      .catch(function () { cache[url] = null; return null; });
+  function getJSON(url, ttl) {
+    return CS.net.json(url, {
+      headers: { accept: 'application/json' },
+      persist: true,
+      ttl: ttl || 12 * 3600 * 1000,
+      retries: 1
+    }).catch(function () { return null; });
   }
 
   /* ============================================================
@@ -24,7 +25,6 @@
      ============================================================ */
 
   var tvmaze = {
-    /* البحث بمعرّف IMDb أدق بكثير من البحث بالاسم */
     byImdb: function (imdbId) {
       if (!imdbId) return Promise.resolve(null);
       return getJSON('https://api.tvmaze.com/lookup/shows?imdb=' + encodeURIComponent(imdbId));
@@ -49,7 +49,7 @@
             var emb = (s._embedded || {});
             return {
               id: s.id,
-              url: s.url || '',
+              url: CS.util.safeUrl(s.url || ''),
               status: s.status || '',
               schedule: s.schedule && s.schedule.days && s.schedule.days.length
                 ? s.schedule.days.join('، ') + (s.schedule.time ? ' · ' + s.schedule.time : '')
@@ -71,16 +71,15 @@
       name: e.name || '',
       season: e.season, number: e.number,
       airdate: e.airdate || '',
-      url: e.url || ''
+      url: CS.util.safeUrl(e.url || '')
     };
   }
 
   /* ============================================================
-     OMDb — يحتاج مفتاح مجاني (١٠٠٠ طلب باليوم)
+     OMDb — يحتاج مفتاحًا مجانيًا (١٠٠٠ طلب باليوم)
      ============================================================ */
 
   var omdb = {
-    /* المفتاح صار يجي من قائمة مصادر البيانات الموحّدة — والخانة القديمة احتياط */
     key: function () {
       var fromList = CS.dataSources && CS.dataSources.keyFor ? CS.dataSources.keyFor('omdb') : '';
       return fromList || CS.store.get(CS.KEYS.omdbKey, '') || '';
@@ -113,7 +112,7 @@
      Wikidata — مجاني ومفتوح، يعطينا معرّفات المواقع الأخرى
      ============================================================ */
 
-  /* تصحيح: P5786 هو معرّف Moviepilot.de لا Trakt — كان يولّد روابط Trakt مكسورة.
+  /* P5786 هو معرّف Moviepilot.de لا Trakt — كان يولّد روابط Trakt مكسورة.
      Trakt الصحيح: P8013 (فيه بادئة movies/ أو shows/) وP12492 (رقم مجرّد).
      وP4947 للأفلام فقط، فالمسلسلات تحتاج P4983. */
   var WD_PROPS = {
@@ -127,12 +126,12 @@
     byImdb: function (imdbId) {
       if (!imdbId) return Promise.resolve(null);
       var sparql =
-        'SELECT ?p ?v WHERE { ?item wdt:P345 "' + imdbId.replace(/["\\]/g, '') + '" . ' +
+        'SELECT ?p ?v WHERE { ?item wdt:P345 "' + String(imdbId).replace(/["\\]/g, '') + '" . ' +
         '?item ?prop ?v . ?prop wikibase:directClaim ?p . ' +
         'VALUES ?p { ' + Object.keys(WD_PROPS).map(function (p) { return 'wdt:' + p; }).join(' ') + ' } } LIMIT 40';
 
       var url = 'https://query.wikidata.org/sparql?format=json&query=' + encodeURIComponent(sparql);
-      return getJSON(url).then(function (j) {
+      return getJSON(url, 30 * 24 * 3600 * 1000).then(function (j) {
         var rows = ((j || {}).results || {}).bindings || [];
         if (!rows.length) return null;
         var out = {};
@@ -141,7 +140,6 @@
           var name = WD_PROPS[pid];
           if (name && !out[name]) out[name] = r.v.value;
         });
-        /* P4947 أفلام فقط — المسلسل ياخذ معرّفه من P4983 */
         if (!out.tmdb && out.tmdbTv) out.tmdb = out.tmdbTv;
         if (!out.trakt && out.traktNum) out.trakt = out.traktNum;
         return Object.keys(out).length ? out : null;
@@ -150,25 +148,74 @@
   };
 
   /* ============================================================
-     تجميع كل المصادر لعمل واحد
+     تجميع كل المصادر لعمل واحد — كل مصدر عبر سجلّه
      ============================================================ */
 
   function enrich(item) {
-    var jobs = [
-      item.type === 'tv' ? tvmaze.show(item) : Promise.resolve(null),
-      omdb.byImdb(item.imdbId),
-      wikidata.byImdb(item.imdbId)
-    ];
-    return Promise.all(jobs).then(function (r) {
-      return { tvmaze: r[0], omdb: r[1], wikidata: r[2] };
+    return CS.contentSources.gather([
+      { id: 'tvmaze',   run: function () { return item.type === 'tv' ? tvmaze.show(item) : null; } },
+      { id: 'omdb',     run: function () { return omdb.byImdb(item.imdbId); } },
+      { id: 'wikidata', run: function () { return wikidata.byImdb(item.imdbId); } }
+    ]).then(function (res) {
+      return {
+        tvmaze: res.byId.tvmaze || null,
+        omdb: res.byId.omdb || null,
+        wikidata: res.byId.wikidata || null,
+        failed: res.failed,
+        skipped: res.skipped
+      };
     }).catch(function () { return {}; });
+  }
+
+  /**
+   * nextEpisodeOf(item) — أقرب حلقة قادمة، من TMDB أولًا ثم TVmaze.
+   * يخدم تنبيهات «نزلت حلقة جديدة» للأعمال المتابَعة.
+   */
+  function nextEpisodeOf(item) {
+    if (!item || item.type !== 'tv') return Promise.resolve(null);
+
+    return CS.contentSources.race([
+      {
+        id: 'tmdb',
+        run: function () {
+          return CS.tmdb.req('/tv/' + item.id, { append_to_response: '' }, { persist: false })
+            .then(function (raw) {
+              var nx = raw && raw.next_episode_to_air;
+              var last = raw && raw.last_episode_to_air;
+              var use = nx || last;
+              if (!use) return null;
+              return {
+                stamp: 's' + use.season_number + 'e' + use.episode_number + '@' + (use.air_date || ''),
+                label: 'م' + use.season_number + ' ح' + use.episode_number +
+                       (use.air_date ? ' · ' + use.air_date : ''),
+                upcoming: !!nx
+              };
+            });
+        }
+      },
+      {
+        id: 'tvmaze',
+        run: function () {
+          return tvmaze.show(item).then(function (s) {
+            var use = s && (s.next || s.prev);
+            if (!use) return null;
+            return {
+              stamp: 's' + use.season + 'e' + use.number + '@' + (use.airdate || ''),
+              label: 'م' + use.season + ' ح' + use.number + (use.airdate ? ' · ' + use.airdate : ''),
+              upcoming: !!(s && s.next)
+            };
+          });
+        }
+      }
+    ]).then(function (r) { return r.value; });
   }
 
   CS.sources = {
     tvmaze: tvmaze,
     omdb: omdb,
     wikidata: wikidata,
-    enrich: enrich
+    enrich: enrich,
+    nextEpisodeOf: nextEpisodeOf
   };
 
 })(window.CS);

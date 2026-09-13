@@ -1,6 +1,10 @@
 /* ============================================================
    feed.js — خلاصة موحّدة: شبكة واحدة بترقيم لا نهائي
-   بدل الصفوف المنفصلة، كل الأعمال في مكان واحد وتتحمّل صفحة صفحة.
+
+   الأقسام الثلاثة تمشي على نفس الطريق بالضبط: نفس بناء الاستعلام،
+   نفس حجم الدفعة، نفس عدد الجولات، نفس حدّ الصفحات. الفرق بينها
+   مفرداتها لا آليتها — وهذا اللي كان يخلّي Explicit ينتهي بعد
+   بضع صفحات بينما General يكمّل: مفرداته كانت خمس كلمات مقابل ٤٨.
    ============================================================ */
 
 (function (CS) {
@@ -10,27 +14,17 @@
   var TMDB_PAGE = 20;     /* TMDB يرجّع ٢٠ لكل صفحة دائمًا */
 
   /* ------------------------------------------------------------
-     مفردات التصنيف — كل المصطلحات اللي طلبتها، بلا استثناء:
-       Sensual · Sensual Cinema · Erotic · Erotic Cinema · Erotic Drama
-       Erotic Thriller · Erotic Romance · Softcore · Sexploitation
-       Sex Comedy · Steamy · Suggestive · Sexually Charged
-       Intimate / Intimacy · Nudity · Arthouse Erotic · Adult Film
-       Pornographic / Porn
+     مفردات الأقسام.
 
-     الأرقام تحت مؤكَّدة من استجابات TMDB فعلية (لا تخمين):
-       190370 erotic movie · 155477 softcore · 10053 sexploitation
-       445 pornography · 281741 nudity · 267122 sex
-       339680 female nudity · 7344 porn star · 158436 porn actress
-       195997 adult filmmaking
-     والباقي يُحلّ وقت التشغيل بمطابقة حرفية من /search/keyword —
-     ما نأخذ أول نتيجة عشوائية أبدًا.
+     الأرقام تحت مؤكَّدة من استجابات TMDB فعلية (لا تخمين). الكلمات
+     اللي بلا رقم تُحلّ وقت التشغيل بمطابقة حرفية من /search/keyword —
+     ما نأخذ أول نتيجة عشوائية أبدًا، ولو ما لقينا الكلمة عند TMDB
+     تسقط بهدوء ولا نخترع لها رقمًا.
      ------------------------------------------------------------ */
 
-  /* المفردة اللي ما لها رقم مؤكَّد تُحلّ وقت التشغيل */
   /* مفردات القسم العام. المصطلحات الملتبسة — seduction · intimacy ·
      affair · taboo · arthouse — مقصاة عمدًا: توقع على دراما وإثارة
-     عامة، فتسحب معها أعمالًا ما لها علاقة. البوابة تطردها لاحقًا،
-     لكن الأفضل ألا نطلبها من TMDB أصلًا فنوفّر الطلب والضجيج. */
+     عامة، فتسحب معها أعمالًا ما لها علاقة. */
   var GENERAL_WORDS = [
     'sensual', 'sensuality', 'erotica', 'eroticism', 'erotic thriller',
     'erotic drama', 'erotic romance', 'erotic movie', 'sex scene', 'sex comedy',
@@ -39,23 +33,23 @@
   ];
 
   /* سينما الجنس الصريح — أعمال سينمائية بمشاهد جنس حقيقي، لا أفلام porn.
-     الأسماء مُتحقَّق منها من TMDB: unsimulated sex (282903) ·
-     roman porno (348517) · sex scene (354470). */
+     المؤكَّد منها: unsimulated sex (282903) · roman porno (348517) ·
+     sex scene (354470) · pinku eiga (381597).
+
+     القائمة وُسّعت عمدًا: القسم كان يعيش على خمس كلمات فينفد بعد
+     صفحتين بينما General يمشي على ٤٨. وكل كلمة هنا تقابل صنف
+     «صريح» في certs.js — فما نطلب من TMDB أعمالًا ترميها البوابة
+     بعد وصولها ونحرق طلبًا بلا نتيجة. */
   var EXPLICIT_WORDS = [
-    'unsimulated sex', 'roman porno', 'sex scene',
-    'pinku eiga', 'erotic film'
+    'explicit sex', 'graphic sex', 'sexual intercourse', 'unsimulated oral sex',
+    'hardcore sex', 'simulated sex', 'nikkatsu roman porno', 'sexual explicitness',
+    'explicit nudity', 'sex act'
   ];
 
   var SECTIONS = {
-    /* عام — سينما جنسية. «porn star» و«porn actress» و«adult filmmaking»
-       تصف أعمالًا *عن* صناعة الإباحية (Boogie Nights وأمثاله) لا أعمالًا
-       إباحية، فمكانها هنا لا في القسم الإباحي. */
-    general:  { seed: [],
-                words: GENERAL_WORDS },
-    /* إباحي — جنس حقيقي غير تمثيلي. البذرة الوحيدة المؤكَّدة هي
-       «pornography»، والباقي يأتي من علم adult عند TMDB — وهذا
-       القسم وحده يطلبه. */
-    explicit: { seed: [282903, 348517, 354470], words: EXPLICIT_WORDS },
+    general:  { seed: [], words: GENERAL_WORDS, useCategories: true },
+    /* البذور المؤكَّدة لقسم Explicit — ومعها كل ما تحلّه الكلمات */
+    explicit: { seed: [282903, 348517, 354470, 381597], words: EXPLICIT_WORDS },
     /* توصيتي — ما ينبني من الكلمات، ينبني من أعمالك اللي عجبتك */
     foryou:   { seed: [], words: [], fromTaste: true }
   };
@@ -63,9 +57,8 @@
   var DEFAULT_SECTION = 'general';
 
   /* ------------------------------------------------------------
-     كل تصنيفات erotic على TMDB — أرقام مُتحقَّق منها من استجابات
-     حقيقية (اسم الكلمة + عدد الأعمال)، فما فيه رقم مخمَّن ولا كلمة
-     وهمية. تُعرض كأزرار تصنيف في الرئيسية، وتُغذّي بذور القسم العام.
+     تصنيفات TMDB — أرقام مُتحقَّق منها من استجابات حقيقية
+     (اسم الكلمة + عدد الأعمال)، فما فيه رقم مخمَّن ولا كلمة وهمية.
      ------------------------------------------------------------ */
   var CATEGORIES = [
     { id: 155477, name: 'Softcore' },
@@ -118,26 +111,98 @@
     { id: 381597, name: 'Pinku Eiga' }
   ];
 
+  /* ------------------------------------------------------------
+     تصنيفات إضافية تُحلّ وقت التشغيل.
+
+     ما نكتب لها أرقامًا: نسأل TMDB عن الاسم بمطابقة حرفية، فاللي
+     يوجد عنده يظهر كزرّ واللي ما يوجد يسقط بهدوء. يعني ما فيه
+     تصنيف مخترع في الواجهة أبدًا، والقائمة تكبر كل ما كبر TMDB.
+     النتيجة تُحفظ في المتصفّح فما نعيد الحلّ كل زيارة.
+     ------------------------------------------------------------ */
+  var EXTRA_NAMES = [
+    'sensual cinema', 'erotic anime', 'softcore porn', 'sex education',
+    'sexual obsession', 'sexual repression', 'sexual tension', 'sexual violence',
+    'female sexuality', 'male gaze', 'burlesque', 'strip club', 'brothel',
+    'harem', 'geisha', 'courtesan', 'call girl', 'escort', 'polyamory',
+    'infidelity', 'forbidden love', 'age difference', 'student teacher relationship',
+    'nudism', 'skinny dipping', 'topless', 'bathhouse', 'sauna',
+    'erotic horror', 'erotic mystery', 'sex addiction', 'swinger',
+    'exhibitionism', 'sex therapy', 'first time', 'honeymoon',
+    'seductress', 'femme fatale', 'love triangle', 'summer romance'
+  ];
+
+  var EXTRA_KEY = 'cs.extra_cats';
+  var EXTRA_TTL = 14 * 24 * 3600 * 1000;
+  var extraCats = null;          /* [{id,name}] بعد الحلّ */
+  var extraPending = null;
+
+  function cachedExtras() {
+    var box = CS.store.get(EXTRA_KEY, null);
+    if (!box || !Array.isArray(box.list) || !box.at) return null;
+    if (Date.now() - box.at > EXTRA_TTL) return null;
+    return box.list;
+  }
+
+  /* يرجّع التصنيفات الإضافية المتحقَّقة — ووعدًا واحدًا مهما تكرّر النداء */
+  function resolveExtras() {
+    if (extraCats) return Promise.resolve(extraCats);
+    var cached = cachedExtras();
+    if (cached) { extraCats = cached; return Promise.resolve(extraCats); }
+    if (extraPending) return extraPending;
+    if (!CS.hasKey()) return Promise.resolve([]);
+
+    extraPending = CS.util.pool(EXTRA_NAMES, 4, function (w) {
+      return CS.tmdb.searchKeywords(w).then(function (list) {
+        var exact = (list || []).filter(function (k) {
+          return String(k.name || '').toLowerCase() === w.toLowerCase();
+        })[0];
+        return exact ? { id: exact.id, name: title(exact.name) } : null;
+      }).catch(function () { return null; });
+    }).then(function (rows) {
+      var have = {};
+      CATEGORIES.forEach(function (c) { have[c.id] = true; });
+      extraCats = rows.filter(function (r) {
+        if (!r || have[r.id]) return false;
+        have[r.id] = true;
+        return true;
+      });
+      CS.store.set(EXTRA_KEY, { at: Date.now(), list: extraCats });
+      extraPending = null;
+      return extraCats;
+    }).catch(function () { extraPending = null; extraCats = []; return []; });
+
+    return extraPending;
+  }
+
+  function title(s) {
+    return String(s || '').replace(/\b\w/g, function (c) { return c.toUpperCase(); });
+  }
+
+  /* القائمة المعروضة = المؤكَّدة + المتحقَّقة وقت التشغيل */
+  function allCategories() {
+    return CATEGORIES.concat(extraCats || cachedExtras() || []);
+  }
+
   /* أسماء البذور المؤكَّدة — من استجابات TMDB حقيقية */
   var SEED_NAMES = {
     190370: 'erotic movie', 155477: 'softcore', 10053: 'sexploitation',
     281741: 'nudity', 267122: 'sex', 339680: 'female nudity',
     7344: 'porn star', 158436: 'porn actress', 195997: 'adult filmmaking',
-    282903: 'unsimulated sex', 348517: 'roman porno', 354470: 'sex scene'
+    282903: 'unsimulated sex', 348517: 'roman porno', 354470: 'sex scene',
+    381597: 'pinku eiga', 343572: 'erotic film'
   };
 
   function sectionFor(tab) { return SECTIONS[tab] ? tab : DEFAULT_SECTION; }
 
   function tagNameOf(id) {
-    for (var i = 0; i < CATEGORIES.length; i++) {
-      if (CATEGORIES[i].id === +id) return CATEGORIES[i].name;
+    var list = allCategories();
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].id === +id) return list[i].name;
     }
     return '';
   }
 
-  /* أرقام الكلمات لكل قسم — تُحلّ مرة وحدة وتنحفظ في الذاكرة.
-     ونحفظ الاسم مقابل الرقم كمان: الفهرس يحتاجه عشان يعرف أي وسم
-     جاب أي عمل بلا ما يسأل TMDB مرة ثانية. */
+  /* أرقام الكلمات لكل قسم — تُحلّ مرة وحدة وتنحفظ في الذاكرة */
   var resolved = {};
   var names = {};
 
@@ -148,14 +213,18 @@
     if (resolved[key]) return Promise.resolve(resolved[key]);
 
     var conf = SECTIONS[key];
-    /* القسم العام صار يعتمد كل تصنيفات erotic: البذرة = كل الأرقام */
-    if (key === 'general' && !conf.seed.length) {
-      resolved[key] = CATEGORIES.map(function (c) { return c.id; });
-      CATEGORIES.forEach(function (c) { names[c.id] = c.name; });
-      return Promise.resolve(resolved[key]);
+    Object.keys(SEED_NAMES).forEach(function (id) { names[id] = SEED_NAMES[id]; });
+
+    /* القسم العام يعتمد كل التصنيفات المؤكَّدة + المتحقَّقة */
+    if (conf.useCategories) {
+      return resolveExtras().then(function () {
+        var list = allCategories();
+        resolved[key] = list.map(function (c) { return c.id; });
+        list.forEach(function (c) { names[c.id] = c.name.toLowerCase(); });
+        return resolved[key];
+      });
     }
-    /* البذور المؤكَّدة أسماؤها معروفة مسبقًا */
-    SEED_NAMES && Object.keys(SEED_NAMES).forEach(function (id) { names[id] = SEED_NAMES[id]; });
+
     if (!conf.words.length) { resolved[key] = conf.seed.slice(); return Promise.resolve(resolved[key]); }
 
     return CS.util.pool(conf.words, 4, function (w) {
@@ -179,22 +248,14 @@
     });
   }
 
-  /* اسم قديم — كان يخدم قسم الإيروتيك وحده */
   function eroticKeywordIds() { return keywordIds('general'); }
 
   /* ------------------------------------------------------------
      التغيير الحيّ: القسم ما يعرض نفس الأعمال كل مرة.
-     محورا التغيير حقيقيان لا شكليان:
-       ١) نافذة كلمات دوّارة — نخلط المفردات ببذرة الجلسة ونأخذ
-          نافذة منها تتحرّك مع كل صفحة، فالاستعلام نفسه يتغيّر.
-       ٢) إزاحة صفحات — نبدأ من صفحة عشوائية داخل ما يسمح به
-          TMDB فعلًا، ونلفّ عليها بدل ما نبدأ من الصفحة ١ دائمًا.
      ------------------------------------------------------------ */
 
   var WINDOW = 9;          /* كم كلمة في الاستعلام الواحد */
 
-  /* خلط ثابت لبذرة معيّنة — نفس البذرة تعطي نفس الترتيب دائمًا،
-     فالصفحة الثانية تكمّل على الأولى ولا تتضارب معها */
   function shuffleBy(list, seed) {
     var out = list.slice();
     var r = seed >>> 0;
@@ -206,31 +267,16 @@
     return out;
   }
 
-  /* نافذة كل صفحة عيّنة مستقلة، لا انزلاقًا على قائمة واحدة.
-     النسخة القديمة كانت تزحزح نافذة متّصلة بمقدار ٣، فبعد ٨ صفحات
-     تكون قد مرّت على كل المفردات — واتحاد أي زيارتين يصير متطابقًا
-     ١٠٠٪ مهما اختلفت البذرة. الآن البذرة تُخلط مع رقم الصفحة، فكل
-     صفحة عيّنة جديدة والاتحاد ما يتقارب أبدًا. */
   function windowOf(ids, seed, page) {
-    /* المفردات القليلة (قسم Explicit ≤ ١١) كانت ترجع كما هي بلا أي
-       تنويع. نأخذ منها عيّنة كمان — أضيق لكنها تتغيّر فعلًا. */
     var take = Math.min(WINDOW, Math.max(3, Math.ceil(ids.length * 0.5)));
     if (ids.length <= 3) return ids;
-
     /* 2654435761 = نسبة ذهبية ٣٢-بت — تفرّق البذور المتقاربة */
     var mixed = shuffleBy(ids, (seed ^ (page * 2654435761)) >>> 0);
     return mixed.slice(0, take);
   }
 
-  /* آخر عدد صفحات شفناه لكل قسم — يُحفظ عشان الزيارة الجاية تقدر
-     تقفز من أول طلب. بدونه maxPages تبدأ من ١ فترجع apiPage(1)=1
-     دائمًا، ويصير أول ٤٠ عملًا في كل زيارة هي نفسها حرفيًا. */
   var PAGES_KEY = 'cs.feed_pages';
 
-  /* عدد الصفحات يُحفظ لكل (قسم · نوع الوسيط · فيلم أو مسلسل).
-     كان مشتركًا بين الأفلام والمسلسلات، وكتالوج المسلسلات أصغر
-     بكثير — فأغلب نداءات المسلسلات كانت تطلب صفحة بعد آخرها
-     وترجع فاضية: نصف الطلبات تضيع بلا نتيجة. */
   function pagesKey(type) { return state.tab + '|' + (state.mediaType || 'all') + '|' + type; }
 
   function knownPages(type) {
@@ -251,8 +297,6 @@
   function apiPage(type, n) {
     var max = Math.max(1, Math.min((state.maxPages && state.maxPages[type]) || 1, 500));
     if (max === 1) return 1;
-    /* الإزاحة تتقدّم بخطوة مبعثرة لا بخطوة واحدة، وإلا صارت زيارتان
-       متجاورتا الإزاحة تمشيان على نفس الصفحات تقريبًا */
     var jump = (state.pageOffset + (n - 1) * (1 + (state.seed % 7))) % max;
     return (jump % max) + 1;
   }
@@ -264,17 +308,26 @@
 
   function blank() {
     return {
-      tab: DEFAULT_SECTION, sort: 'popularity.desc', origLang: '', minRating: 0,
+      tab: DEFAULT_SECTION,
+      sort: 'popularity.desc',
+      origLang: '',
+      minRating: 0,
       mediaType: '',                       /* '' الكل · movie · tv · reality */
-      forYouMin: FORYOU_MIN,               /* عتبة التوصيات — ثابتة، ما تنزل */
-      strong: false,                       /* «تحديث قوي» — يطلب أعمالًا أقوى */
-      tag: 0,                              /* تصنيف مختار من أزرار التصنيفات */
-      /* بذرة الجلسة: تتغيّر مع كل فتح للقسم فتتغيّر الأعمال المعروضة */
+      yearFrom: 0,
+      yearTo: 0,
+      country: '',
+      quality: '',                         /* '' · any · solid · proven */
+      forYouMin: FORYOU_MIN,
+      strong: false,
+      tag: 0,
       seed: (Math.random() * 0x7fffffff) | 0,
       pageOffset: Math.floor(Math.random() * 97),
       rewound: false,
+      roundFailed: false,
+      hardFail: false,
       maxPages: { movie: 1, tv: 1 },
-      items: [], seen: {}, page: 0, exhausted: false, loading: false, token: 0
+      items: [], seen: {}, page: 0, exhausted: false, loading: false, token: 0,
+      lastError: ''
     };
   }
 
@@ -285,12 +338,6 @@
     state = blank();
     Object.keys(patch || {}).forEach(function (k) { state[k] = patch[k]; });
     state.token = t;
-    /* نبدأ من العدد اللي تعلّمناه آخر زيارة، فالقفزة العشوائية تشتغل
-       من الطلب الأول لا من الثاني */
-    /* أول زيارة ما نعرف فيها عدد الصفحات، فكانت apiPage تلتصق بالصفحة
-       الأولى — أي أشهر الأعمال، نفسها لكل زائر أول مرة. نفترض حدًّا
-       متحفّظًا (كتالوج الأفلام لهذي الكلمات أكبر منه بكثير)، ولو طلع
-       غلطًا فالرجوع للصفحة الأولى في loadMore يصحّحه من أول جولة. */
     state.maxPages = {
       movie: Math.max(knownPages('movie'), 6),
       tv: Math.max(knownPages('tv'), 2)
@@ -300,60 +347,107 @@
 
   function current() { return state; }
 
-  /* ---------- بناء معاملات الاستكشاف ---------- */
+  /* ---------- الفلاتر والترتيب ---------- */
+
+  /* الترتيبات المعروضة — «الأبجدي» يُرتَّب عندنا لأن TMDB ما يدعمه */
+  var SORTS = [
+    { id: 'popularity.desc',           label: 'الأكثر مشاهدة' },
+    { id: 'primary_release_date.desc', label: 'الأحدث' },
+    { id: 'vote_average.desc',         label: 'الأعلى تقييمًا' },
+    { id: 'vote_count.desc',           label: 'الأكثر تصويتًا' },
+    { id: 'revenue.desc',              label: 'الأعلى إيرادًا' },
+    { id: 'title.asc',                 label: 'أبجدي (أ ← ي)' },
+    { id: 'foryou',                    label: '🎯 على ذوقي' }
+  ];
+
+  /* عتبات الجودة — «الجودة» هنا رصانة البيانات لا دقّة الفيديو:
+     كم شخصًا قيّم العمل فعلًا. هذا كل ما تعطيه المصادر المجانية. */
+  var QUALITY = {
+    '':       { label: 'أي عمل', votes: 0 },
+    solid:    { label: 'له تقييمات (٢٠+ صوت)', votes: 20 },
+    proven:   { label: 'معروف (١٠٠+ صوت)', votes: 100 },
+    landmark: { label: 'راسخ (٥٠٠+ صوت)', votes: 500 }
+  };
+
+  var COUNTRIES = [
+    { code: '',   name: 'كل البلدان' },
+    { code: 'US', name: 'أمريكا' },   { code: 'FR', name: 'فرنسا' },
+    { code: 'IT', name: 'إيطاليا' },  { code: 'JP', name: 'اليابان' },
+    { code: 'ES', name: 'إسبانيا' },  { code: 'DE', name: 'ألمانيا' },
+    { code: 'GB', name: 'بريطانيا' }, { code: 'KR', name: 'كوريا' },
+    { code: 'HK', name: 'هونغ كونغ' },{ code: 'BR', name: 'البرازيل' },
+    { code: 'MX', name: 'المكسيك' },  { code: 'SE', name: 'السويد' },
+    { code: 'IN', name: 'الهند' },    { code: 'TR', name: 'تركيا' },
+    { code: 'EG', name: 'مصر' },      { code: 'LB', name: 'لبنان' }
+  ];
 
   function baseParams() {
     var p = {};
     if (state.origLang) p.with_original_language = state.origLang;
     if (state.minRating) p['vote_average.gte'] = state.minRating;
+    if (state.country) p.with_origin_country = state.country;
 
-    /* الترتيب: TMDB ما يعرف «على ذوقي» — نحوّله لشهرة ثم نرتّب محليًا */
-    p.sort_by = state.sort === 'foryou' ? 'popularity.desc' : state.sort;
+    var q = QUALITY[state.quality || ''];
+    if (q && q.votes) p['vote_count.gte'] = q.votes;
 
-    /* حد الأصوات يمنع الأعمال المجهولة تمامًا من إغراق النتائج،
-       لكن نخفّضه بشدة عشان ما ينحصر العرض في المشهور العالمي فقط */
-    if (state.sort === 'vote_average.desc') p['vote_count.gte'] = 120;
-    else if (!CS.certs.adultAllowed()) p['vote_count.gte'] = 8;
+    /* الترتيب: TMDB ما يعرف «على ذوقي» ولا «أبجدي» — نحوّلهما لشهرة
+       ونرتّب محليًا بعد الجلب */
+    var sort = state.sort;
+    if (sort === 'foryou' || sort === 'title.asc') sort = 'popularity.desc';
+    p.sort_by = sort;
 
-    /* وضع «تحديث قوي»: يطلب أعمالًا أقوى لا مجرد أعمال جديدة —
-       حد أصوات عالٍ + ترتيب بالشهرة، فالمعروض يتبدّل إلى أعمال
-       معروفة ومقيَّمة، لا بقية الكتالوج. */
+    /* مدى سنوات الإنتاج */
+    if (state.yearFrom) p['primary_release_date.gte'] = state.yearFrom + '-01-01';
+    if (state.yearTo)   p['primary_release_date.lte'] = state.yearTo + '-12-31';
+
+    if (state.sort === 'vote_average.desc' && !p['vote_count.gte']) p['vote_count.gte'] = 120;
+
+    /* وضع «تحديث قوي»: أعمال أقوى لا مجرد أعمال جديدة */
     if (state.strong) {
       p.sort_by = 'popularity.desc';
-      p['vote_count.gte'] = 80;
+      p['vote_count.gte'] = Math.max(80, +p['vote_count.gte'] || 0);
     }
 
     return p;
   }
 
+  /* أسماء حقول التاريخ تختلف بين الأفلام والمسلسلات */
+  function forTv(p) {
+    var q = Object.assign({}, p);
+    if (q.sort_by === 'primary_release_date.desc') q.sort_by = 'first_air_date.desc';
+    if (q['primary_release_date.gte']) { q['first_air_date.gte'] = q['primary_release_date.gte']; delete q['primary_release_date.gte']; }
+    if (q['primary_release_date.lte']) { q['first_air_date.lte'] = q['primary_release_date.lte']; delete q['primary_release_date.lte']; }
+    delete q.certification; delete q['certification.gte']; delete q.certification_country;
+    return q;
+  }
+
   /* أنواع TMDB للبرامج الواقعية */
   var REALITY_GENRES = '10764|10767';
 
-  /* أي نداءات TMDB يحتاجها القسم الحالي لهذه الصفحة.
-     الأقسام كلها تمرّ من نفس الطريق: كلمات مفتاحية + include_adult
-     على /discover. ما فيه فرع «عام» بلا كلمات، فما فيه طريق يدخل
-     منه عمل غير مقصود. */
+  /* ------------------------------------------------------------
+     أي نداءات TMDB يحتاجها القسم الحالي لهذه الصفحة.
+     الأقسام كلها تمرّ من نفس الطريق: كلمات مفتاحية على /discover،
+     نداء مفرد لكل كلمة عشان نعرف أي كلمة جابت أي عمل بلا طلب زائد.
+     ------------------------------------------------------------ */
   function sourcesFor(page) {
     var p = baseParams();
+    /* تُعاد كل جولة: بدون التصفير كانت جولة ساقطة سابقة تخلّي
+       الجولة التالية تُعلن انقطاعًا وهي سليمة */
+    state.roundFailed = false;
 
-    /* أعمال الكبار ما توصل أي حد أصوات — الحد يفرّغ القسم */
-    delete p['vote_count.gte'];
+    /* أعمال الكبار ما توصل أي حد أصوات إلا لو المستخدم طلبه صراحةً */
+    if (!state.quality && !state.strong && state.sort !== 'vote_average.desc') {
+      delete p['vote_count.gte'];
+    }
 
     if (SECTIONS[sectionFor(state.tab)].fromTaste) return fromTaste(page);
 
-    /* تصنيف مختار: التصنيف مقطعًا مع كلمة الموقع القوية (AND بفاصلة).
-       التصنيف وحده يرجّع أعمالًا عامة موسومة به (Fifty Shades مثلًا)
-       فترميها البوابة ويطلع القسم فاضيًا. الفصل بفاصلة عند TMDB = AND،
-       فالناتج أعمال ذلك التصنيف فعلًا وداخل كتالوج الموقع معًا.
-       والمقطع يتغيّر بالبذرة فيتجدّد المعروض. */
+    /* تصنيف مختار: التصنيف مقطوعًا مع مفردة القسم القوية (AND بفاصلة) */
     if (state.tag) {
       var tagKw = String(state.tag);
       var tagJobs = [];
 
       if (state.mediaType !== 'tv' && state.mediaType !== 'reality') {
-        /* ثلاث صفحات بترتيبات مختلفة: الصفحة الأولى من أي تصنيف
-           أعمال عامة مشهورة، والعمق هو اللي يحمل الأعمال الجنسية
-           الحقيقية لهذا التصنيف. */
         ['popularity.desc', 'vote_count.desc'].forEach(function (sb, i) {
           tagJobs.push(CS.tmdb.discover('movie', Object.assign({}, p, {
             with_keywords: tagKw, sort_by: sb
@@ -361,12 +455,17 @@
         });
       }
       if (state.mediaType !== 'movie') {
-        var tq2 = Object.assign({}, p, { with_keywords: tagKw, sort_by: 'popularity.desc' });
+        var tq2 = Object.assign({}, forTv(p), { with_keywords: tagKw, sort_by: 'popularity.desc' });
+        if (state.mediaType === 'reality') tq2.with_genres = REALITY_GENRES;
+        else if (state.mediaType === 'tv') tq2.without_genres = '10764,10767';
         tagJobs.push(CS.tmdb.discover('tv', tq2, page));
       }
       var tagName = tagNameOf(state.tag);
       return Promise.all(tagJobs).then(function (lists) {
+        var failedT = (lists || []).filter(function (l) { return l && l.failed; }).length;
+        state.roundFailed = lists.length > 0 && failedT === lists.length;
         (lists || []).forEach(function (l) {
+          if (l && l.failed) state.lastError = l.failed;
           if (tagName && CS.certs.seedKeyword) {
             (l || []).forEach(function (it) { CS.certs.seedKeyword(it, tagName); });
           }
@@ -382,13 +481,21 @@
       var want = state.mediaType;
       var jobs = [];
       var kinds = [];
-      var names = keywordNames();
+      var nameMap = keywordNames();
 
-      /* نداء لكل كلمة على حدة بدل اتحاد الكلمات.
-         الاتحاد كان يرجّع أعمالًا ما ندري أي كلمة جابتها، فكل عمل
-         يكلّف طلب /keywords عشان البوابة تحكم عليه — عشرات الطلبات
-         لرسم صفحة وحدة. النداء المفرد يعطي الدليل مع النتيجة نفسها. */
-      var picks = ids.slice(0, 5);
+      /* نقدّم الكلمات القوية داخل النافذة.
+         العمل الراجع من /discover بكلمة قوية (erotic · softcore …)
+         يحمل تلك الكلمة قطعًا، فseedKeyword يفتح له البوابة مجانًا.
+         الكلمة الضعيفة (Lesbian · Taboo …) ما تفتحها، فكل بطاقة
+         منها تكلّف نداء /keywords — وهذا كان أكبر بند في الفاتورة. */
+      var strong = [], weak = [];
+      ids.forEach(function (id) {
+        var nm = nameMap[id] || tagNameOf(id);
+        if (CS.certs.isStrongName && CS.certs.isStrongName(nm)) strong.push(id);
+        else weak.push(id);
+      });
+      var ordered = strong.concat(weak);
+      var picks = ordered.slice(0, 5);
 
       if (want !== 'tv' && want !== 'reality') {
         picks.forEach(function (kid) {
@@ -398,11 +505,7 @@
         });
       }
       if (want !== 'movie') {
-        var tq = Object.assign({}, p, { with_keywords: ids.join('|') });
-        /* التاريخ في المسلسلات اسمه مختلف، والتصنيف غير مدعوم فيها أصلًا */
-        if (tq.sort_by === 'primary_release_date.desc') tq.sort_by = 'first_air_date.desc';
-        delete tq.certification; delete tq['certification.gte']; delete tq.certification_country;
-        /* «مسلسلات» تستبعد البرامج الواقعية، و«برامج واقعية» تحصر فيها */
+        var tq = forTv(p);
         if (want === 'reality') tq.with_genres = REALITY_GENRES;
         else if (want === 'tv') tq.without_genres = '10764,10767';
         picks.forEach(function (kid) {
@@ -413,15 +516,21 @@
       }
 
       return Promise.all(jobs).then(function (sets) {
+        /* كل نداءات الجولة سقطت؟ إذن المشكلة في الاتصال لا في
+           الفلاتر — نوقف فورًا بدل ما ندور ست جولات بإعادة محاولة
+           لكل واحدة، فيقعد المستخدم دقيقة أمام هياكل فاضية. */
+        var failed = (sets || []).filter(function (l) { return l && l.failed; }).length;
+        state.roundFailed = sets.length > 0 && failed === sets.length;
+
         sets.forEach(function (l, i) {
           var k = kinds[i];
           if (!k || !l) return;
+          if (l.failed) state.lastError = l.failed;
           /* دليل المصدر: كل عمل في هذي القائمة يحمل هذي الكلمة قطعًا */
-          var nm = names[k.kw];
+          var nm = nameMap[k.kw];
           if (nm && CS.certs.seedKeyword) {
             l.forEach(function (it) { CS.certs.seedKeyword(it, nm); });
           }
-          /* نتعلّم أقصى صفحة لكل نوع على حدة */
           if (!l.totalPages) return;
           state.maxPages[k.type] = Math.max(state.maxPages[k.type] || 1, l.totalPages);
           rememberPages(k.type, state.maxPages[k.type]);
@@ -432,26 +541,60 @@
   }
 
   /* ------------------------------------------------------------
-     قسم «توصيتي» — ما ينبني من كلمات، ينبني من أعمالك اللي عجبتك.
-     نأخذ ترشيحات TMDB ومشابهاته لكل عمل صوّت له 👍، ونرتّبها
-     بنسبة تطابق حقيقية من ملف ذوقك. النسبة اللي تظهر على البطاقة
-     هي نفسها اللي رتّبنا بها — ما فيه رقم للعرض ورقم للترتيب.
+     قسم «توصيتي» — من أعمالك اللي عجبتك، على القصة والوسوم
+     والمخرج والممثلين لا على الشهرة.
      ------------------------------------------------------------ */
+  /* اسم الوسم ← رقمه، من التصنيفات المتحقَّقة ومن ما حلّيناه */
+  var nameToId = null, nameToIdStamp = 0;
+  function keywordIdByName(name) {
+    var stamp = allCategories().length;
+    if (!nameToId || nameToIdStamp !== stamp) {
+      nameToId = {};
+      allCategories().forEach(function (c) { nameToId[String(c.name).toLowerCase()] = c.id; });
+      Object.keys(names).forEach(function (id) { nameToId[String(names[id]).toLowerCase()] = +id; });
+      nameToIdStamp = stamp;
+    }
+    return nameToId[String(name || '').toLowerCase()] || 0;
+  }
+
+  /**
+   * أرقام وسوم عمل محبوب.
+   * الإعجاب من على البوستر ما يحمل keywordIds — تُملأ من تفاصيل
+   * العمل وحدها، وأغلب الإعجابات تصير من الشبكة لا من صفحة العمل.
+   * فكانت نداءات «كلمات العمل» في التوصيات تمشي فاضية. نكمّلها من
+   * ذاكرة الوسوم اللي سحبتها البوابة أصلًا — بلا أي طلب جديد.
+   */
+  /* رقم الوسم من اسمه والعكس — المحرّكان يتكلّمان لغتين */
+  function keywordNameOf(id) {
+    var n = names[id];
+    if (n) return String(n).toLowerCase();
+    var list = allCategories();
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].id === +id) return String(list[i].name).toLowerCase();
+    }
+    return '';
+  }
+
+  function seedKeywordIds(it) {
+    var ids = (it.keywordIds || []).filter(Boolean);
+    if (ids.length) return ids;
+    var heat = CS.certs && CS.certs.cachedHeat(it);
+    var out = [];
+    ((heat && heat.names) || []).forEach(function (n) {
+      var id = keywordIdByName(n);
+      if (id && out.indexOf(id) === -1) out.push(id);
+    });
+    return out;
+  }
+
   function likedSeeds() {
-    var liked = CS.taste.likes() || [];
-    /* نخلط بالبذرة عشان التوصيات تتغيّر مع كل فتح بدل ما تتجمّد
-       على آخر عملين أعجباك */
-    var pool = liked.filter(function (it) {
+    var p = CS.reco ? CS.reco.tasteProfile() : null;
+    var pool = ((p && p.seeds) || CS.taste.likes() || []).filter(function (it) {
       return it && it.source === 'tmdb' && (it.type === 'movie' || it.type === 'tv');
     });
     if (!pool.length) return pool;
 
-    /* الخلط ثم القصّ كان يرمي البذرة: بأقل من ٩ إعجابات ترجع نفس
-       القائمة دائمًا. ندوّر البداية بالبذرة قبل القصّ، فالبذور
-       المختلفة تعطي بدايات مختلفة حتى مع عملين اثنين. */
     var mixed = shuffleBy(pool, state.seed);
-    /* أخذ ثمانية من قائمة طولها ثمانية يرجّع نفس المجموعة مهما دارت
-       — البذرة تضيع. نأخذ جزءًا أصغر عشان الاختيار نفسه يتغيّر. */
     var take = Math.max(1, Math.min(5, Math.ceil(mixed.length * 0.7)));
     var start = (state.seed >>> 0) % mixed.length;
     var out = [];
@@ -463,10 +606,11 @@
     var seeds = likedSeeds();
     if (!seeds.length) return Promise.resolve([]);
 
-    /* الصفحة تُزاح بالبذرة كمان: بعملين اثنين محبوبين، الصفحة هي
-       المحور الوحيد الباقي للتغيير بين الزيارات */
+    var prof = CS.reco ? CS.reco.tasteProfile() : null;
     var pg = ((page - 1 + (state.seed % 3)) % 5) + 1;
-    var ADULT = SECTIONS.general.seed;
+    var ADULT = SECTIONS.explicit.seed;
+    var p0 = baseParams();
+    delete p0['vote_count.gte'];
 
     return CS.util.pool(seeds, 4, function (it) {
       var jobs = [
@@ -474,52 +618,54 @@
         CS.tmdb.relatedPage(it.type, it.id, 'similar', pg)
       ];
 
-      /* ترشيحات TMDB لأعمال الكبار ترجع أعمالًا عادية، وبوابة المحتوى
-         ترميها كلها فيطلع القسم ببطاقتين أو فاضيًا. نطلب من TMDB بدلها
-         من كتالوج الموقع نفسه: كلمات العمل المفتاحية + نوعه + نوعه
-         السينمائي، وداخل مفردات القسم — فالناتج شبيه فعلًا ويعدّي
-         البوابة بدل ما يُرمى. */
-      var own = (it.keywordIds || []).slice(0, 3);
-      var genres = (it.genreIds || []).slice(0, 2).join('|');
       /* نداء لكل كلمة من كلمات العمل على حدة — لا اتحادها: الاتحاد
-         (OR) يرجّع أشهر الأفلام لأن كلمة مثل «husband wife relationship»
-         توقع على دراما عادية، فتغرق نتيجة الموضوع. النداء المفرد يعطي
-         أعمال الموضوع نفسه (swinger · sexploitation ...).
-         نعلّم مواقعها themeAt عشان نتائجها تُقدَّم وتُوسم. */
+         (OR) يرجّع أشهر الأفلام لأن كلمة عامة توقع على دراما عادية. */
+      var own = seedKeywordIds(it).slice(0, 3);
       var themeAt = own.length ? jobs.length : -1;
       own.forEach(function (kw) {
-        jobs.push(CS.tmdb.discover(it.type, { with_keywords: String(kw) }, pg));
+        jobs.push(CS.tmdb.discover(it.type, Object.assign({}, p0, { with_keywords: String(kw) }), pg));
       });
-      /* حشو: كتالوج الموقع بنفس التصنيف — يملأ القسم إذا الموضوع ضيّق،
-         لكنه يترتّب بعد نتائج الموضوع لا قبلها. */
-      jobs.push(CS.tmdb.discover(it.type, {
+
+      /* أعمال المخرج نفسه وأعمال الممثلين — محورا القرب اللي كانا
+         غائبين تمامًا عن هذا القسم */
+      var peopleAt = jobs.length;
+      var people = ((prof && prof.people) || []).slice(0, 2);
+      people.forEach(function (pid) {
+        jobs.push(CS.tmdb.discover(it.type, Object.assign({}, p0, { with_people: String(pid) }), 1));
+      });
+
+      /* حشو: كتالوج الموقع بنفس التصنيف — يملأ القسم إذا الموضوع ضيّق.
+         نعلّمه صراحةً عشان ما يتقدّم على نتائج الموضوع: هو استعلام
+         على كتالوج الموقع كله لا على ذوقك. */
+      var fillerAt = jobs.length;
+      var genres = (it.genreIds || []).slice(0, 2).join('|');
+      jobs.push(CS.tmdb.discover(it.type, Object.assign({}, p0, {
         with_keywords: ADULT.join('|'),
         with_genres: genres
-      }, pg + 3));
+      }), pg + 3));
 
       return Promise.all(jobs).then(function (r) {
-        /* discover يرجّع مصفوفة عارية وrelatedPage يرجّع {items} —
-           الخلط بينهما كان يرمي نتائج discover كلها بلا ما ينتبه أحد. */
+        /* discover يرجّع مصفوفة عارية وrelatedPage يرجّع {items} */
         var pick = function (x) { return Array.isArray(x) ? x : ((x && x.items) || []); };
-        var theme = [];
-        var rest = [];
+        var theme = [], person = [], rest = [];
         r.forEach(function (x, i) {
           var list = pick(x);
           if (themeAt >= 0 && i >= themeAt && i < themeAt + own.length) {
-            list.forEach(function (m) { m.themeHit = true; });
+            list.forEach(function (m) { m.themeHit = true; m.seedOf = it; });
             theme = theme.concat(list);
+          } else if (i >= peopleAt && i < peopleAt + people.length) {
+            list.forEach(function (m) { m.personHit = true; m.seedOf = it; });
+            person = person.concat(list);
           } else {
+            var isFiller = i === fillerAt;
+            list.forEach(function (m) { m.seedOf = it; if (isFiller) m.fillerHit = true; });
             rest = rest.concat(list);
           }
         });
-        /* الموضوع أولًا: absorb يحجز المفاتيح بالترتيب، فلو جاءت الترشيحات
-           العامة قبله كانت حجزت نفس الأعمال وضاع الوسم عنها. */
-        return theme.concat(rest);
+        /* الموضوع أولًا: absorb يحجز المفاتيح بالترتيب */
+        return theme.concat(person, rest);
       }).catch(function () { return []; });
-    }).then(function (sets) {
-      /* «توصيتي» ما يستعمل apiPage — صفحاته من relatedPage مباشرة */
-      return sets;
-    });
+    }).then(function (sets) { return sets; });
   }
 
   /* ---------- التحميل ---------- */
@@ -536,9 +682,8 @@
 
     state.loading = true;
     var token = state.token;
-    /* تصنيف مختار: نكتفي بدفعة أصغر فنرسم الشبكة بسرعة — التصنيف
-       الواحد يعطي أعمالًا أقل من نافذة القسم العامة، وكان انتظار
-       ٥٠ عملًا يترك المستخدم على الهياكل طويلًا. */
+    /* نفس حجم الدفعة لكل الأقسام — التصنيف المختار وحده أصغر لأنه
+       يرسم أسرع، وهذا اختيار عرض لا حدّ على المادة */
     var target = state.items.length + (state.tag ? 24 : PAGE);
     var emptyRounds = 0;
 
@@ -547,7 +692,6 @@
       if (state.items.length >= target || state.exhausted) return Promise.resolve();
 
       state.page += 1;
-      /* TMDB يرفض ما بعد الصفحة ٥٠٠ */
       if (state.page > 500) { state.exhausted = true; return Promise.resolve(); }
 
       return sourcesFor(state.page).then(function (sets) {
@@ -556,14 +700,17 @@
         var before = state.items.length;
         (sets || []).forEach(function (list) { absorb(list); });
 
+        /* اتصال ساقط: نخرج فورًا ونترك الواجهة تقول السبب الحقيقي */
+        if (state.roundFailed && state.items.length === before) {
+          state.exhausted = true;
+          state.hardFail = true;
+          return;
+        }
+
         if (state.items.length === before) {
           emptyRounds++;
-          /* ثلاث صفحات متتالية بلا جديد ← خلصت المادة.
-             «توصيتي» ما ينزّل عتبته أبدًا: العتبة ٨٠٪ هي المطلوبة،
-             وقسم قصير صادق أفضل من قسم طويل بنِسَب مضروبة. */
-          /* الإزاحة قد تقع بعد آخر صفحة فيرجع كل شي فاضيًا ونعلن
-             «خلصت المادة» والشبكة فاضية من أول تحميل. قبل ما نستسلم
-             نرجع للصفحة الأولى مرة وحدة — هي مضمونة دائمًا. */
+          /* الإزاحة قد تقع بعد آخر صفحة — نرجع للأولى مرة وحدة قبل
+             ما نعلن «خلصت المادة» */
           if (emptyRounds >= 2 && !state.rewound) {
             state.rewound = true;
             state.pageOffset = 0;
@@ -572,8 +719,7 @@
             return round();
           }
           /* كل جولة تسحب نافذة كلمات جديدة، فجولة فاضية ما تعني
-             «خلصت المادة» — تعني إن هذي العيّنة ما كانت منتجة.
-             ثلاث جولات كانت تُنهي القسم مبكرًا وتترك شبكة شبه فاضية. */
+             «خلصت المادة». نفس الحدّ لكل الأقسام بلا استثناء. */
           if (emptyRounds >= 6) { state.exhausted = true; return; }
         } else {
           emptyRounds = 0;
@@ -602,52 +748,50 @@
     (list || []).forEach(function (it) {
       if (!it) return;
       var k = it.type + ':' + it.id;
+      /* منع التكرار: العمل الواحد ما يدخل مرتين مهما جابه أكثر من
+         نداء أو أكثر من مصدر */
       if (state.seen[k]) return;
 
       /* الإباحي ما يظهر إلا في قسم يطلبه */
       if (it.adult && !CS.certs.adultAllowed()) return;
-      /* وصنف العمل لازم يطابق صنف القسم: سينما في «عام»، إباحي في
-         «Explicit». بدونها القسمان يعرضان نفس البركة. */
-      /* عند تصنيف مختار لا نطبّق صنف القسم: المستخدم طلب هذا
-         التصنيف بعينه وهو جنسي بطبيعته، فحصرُه في صنف القسم كان
-         يُفرغ الشبكة (تصنيفات كثيرة تصنيفها «صريح» لا «إيحاء»). */
+      /* صنف العمل لازم يطابق صنف القسم — إلا عند تصنيف مختار */
       if (!state.tag && CS.certs.kindFits && CS.certs.kindFits(it) === false) return;
       /* الأعمال اللي صوّت عليها ما تتكرر في الاستكشاف */
       if (taste[k]) return;
       /* بلا بوستر = بطاقة فاضية */
       if (!it.poster) return;
 
-      /* «توصيتي»: النسبة تُحسب هنا، والعمل ما يدخل إلا إذا عدّى العتبة.
-         نفس الرقم اللي يظهر على البطاقة هو اللي رتّبنا وفلترنا به —
-         ما فيه رقم للعرض وآخر للترتيب. */
-      if (state.tab === 'foryou') {
-        it.matchPct = CS.taste.matchPct(it);
-        it.matchStamp = CS.taste.version ? CS.taste.version() : 0;
-        if ((it.matchPct || 0) < state.forYouMin) return;
-      }
+      /* «توصيتي»: العتبة لا تُطبَّق هنا.
+         وقت الاستيعاب ما تكون وسوم العمل قد وصلت بعد، فالنسبة
+         تُحسب من النوع السينمائي وحده وترسب كل النتائج — القسم
+         يطلع فاضيًا ومعك عشرات الإعجابات. التصفية صارت بعد وصول
+         الوسوم في app.paintFeed، وهناك النسبة حقيقية. */
 
       state.seen[k] = true;
       state.items.push(it);
     });
   }
 
-  /* «على ذوقي» يرتّب محليًا حسب أنواعك المفضلة */
+  /* الترتيب المحلي — للترتيبات اللي ما يدعمها TMDB */
   function rank() {
-    /* قسم التوصيات يترتّب بنسبة التطابق نفسها، أعلاها أولًا */
     if (state.tab === 'foryou') {
-      /* الموضوع قبل التصنيف: العمل اللي يشارك قصة العمل اللي عجبك
-         يسبق اللي يشاركه النوع فقط، ونسبة التطابق تفصل داخل كل مجموعة. */
+      /* الموضوع ثم الأشخاص ثم النسبة */
       state.items.sort(function (a, b) {
-        var t = (b.themeHit ? 1 : 0) - (a.themeHit ? 1 : 0);
+        var t = (b.themeHit ? 2 : 0) + (b.personHit ? 1 : 0) -
+                ((a.themeHit ? 2 : 0) + (a.personHit ? 1 : 0));
         if (t) return t;
         return (b.matchPct || 0) - (a.matchPct || 0);
       });
       return;
     }
-    /* «تحديث قوي»: نرتّب بالقوة لا بالشهرة الخام — عدد الأصوات
-       والتقييم والشهرة معًا، فيصعد المعروف المقيَّم ويهبط المجهول.
-       (حد الأصوات في الطلب لا يفيد: sourcesFor يحذفه لأن أعمال
-       الكبار ما تبلغ أي حد.) */
+
+    if (state.sort === 'title.asc') {
+      state.items.sort(function (a, b) {
+        return String(a.title || '').localeCompare(String(b.title || ''), 'ar');
+      });
+      return;
+    }
+
     if (state.strong) {
       state.items.forEach(function (it) {
         it.strongScore = Math.log10((it.votes || 0) + 1) * 3 + (it.rating || 0) +
@@ -673,6 +817,44 @@
     state.items.sort(function (a, b) { return (b.tasteScore || 0) - (a.tasteScore || 0); });
   }
 
+  /* ------------------------------------------------------------
+     صفوف جاهزة — الأعلى تقييمًا · الأحدث · الأكثر رواجًا
+     كلها تمرّ من نفس بوابة المحتوى، فما فيه صف يتسرّب منه عمل عام.
+     ------------------------------------------------------------ */
+  function shelf(kind, limit) {
+    var sortBy = kind === 'top' ? 'vote_average.desc'
+               : kind === 'new' ? 'primary_release_date.desc'
+               : 'popularity.desc';
+
+    return keywordIds('general').then(function (ids) {
+      if (!ids || !ids.length) return [];
+      var pick = shuffleBy(ids, (Date.now() / 3600000) | 0).slice(0, 2);
+      var p = { sort_by: sortBy };
+      if (kind === 'top') p['vote_count.gte'] = 60;
+      return CS.util.pool(pick, 4, function (id) {
+        return CS.tmdb.discover('movie', Object.assign({}, p, { with_keywords: String(id) }), 1)
+          .then(function (l) {
+            var nm = keywordNames()[id];
+            if (nm && CS.certs.seedKeyword) (l || []).forEach(function (it) { CS.certs.seedKeyword(it, nm); });
+            return l || [];
+          });
+      }).then(function (sets) {
+        var seen = {}, out = [];
+        sets.forEach(function (l) {
+          (l || []).forEach(function (it) {
+            var k = it.type + ':' + it.id;
+            if (seen[k] || !it.poster) return;
+            seen[k] = true;
+            out.push(it);
+          });
+        });
+        if (kind === 'top') out.sort(function (a, b) { return (b.rating || 0) - (a.rating || 0); });
+        if (kind === 'new') out.sort(function (a, b) { return (b.year || 0) - (a.year || 0); });
+        return out.slice(0, limit || 20);
+      });
+    }).catch(function () { return []; });
+  }
+
   CS.feed = {
     PAGE: PAGE,
     TMDB_PAGE: TMDB_PAGE,
@@ -680,10 +862,18 @@
     DEFAULT_SECTION: DEFAULT_SECTION,
     FORYOU_MIN: FORYOU_MIN,
     CATEGORIES: CATEGORIES,
+    SORTS: SORTS,
+    QUALITY: QUALITY,
+    COUNTRIES: COUNTRIES,
+    allCategories: allCategories,
+    resolveExtras: resolveExtras,
     tagNameOf: tagNameOf,
+    keywordNameOf: keywordNameOf,
+    keywordIdOf: keywordIdByName,
     reset: reset,
     current: current,
     loadMore: loadMore,
+    shelf: shelf,
     keywordIds: keywordIds,
     keywordNames: keywordNames,
     eroticKeywordIds: eroticKeywordIds

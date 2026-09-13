@@ -1,59 +1,74 @@
 /* ============================================================
-   catalog.js — الفهرس المحلي لأعمال الكبار
+   catalog.js — الفهرس المحلي لأعمال الموقع
 
    لماذا يوجد هذا الملف:
    TMDB ما عنده بحث في نص القصة. /search/movie يطابق العناوين فقط،
-   فالبحث بوصف القصة ما كان له أي مصدر حقيقي داخل TMDB — وهذا سبب
-   إنه كان يرجّع أعمالًا خارج الوصف تمامًا.
+   فالبحث بوصف القصة ما كان له أي مصدر حقيقي داخل TMDB.
 
-   الحل: نبني فهرسًا محليًا. كل عمل يمرّ على الموقع (من الأقسام أو
-   من كنس مخصّص) ينحفظ عندنا بملخّصه ووسومه. البحث بالوصف يصير
-   مطابقة نصية على هذا الفهرس — فوريّة، بلا طلبات، وأهم من هذا:
-   الفهرس نفسه مبني من كلمات الكبار المفتاحية، فما فيه أصلًا عمل
-   عام داخله ليتسرّب.
+   الحل: فهرس محلي. كل عمل يمرّ على الموقع ينحفظ بملخّصه ووسومه
+   وطاقمه، والبحث بالوصف يصير مطابقة نصية عليه — فوريّة وبلا طلبات.
 
-   الفهرس ليس المصدر الوحيد — محرّكات TMDB وويكيبيديا تبقى شغّالة
-   للاتساع، لكن كلها تمرّ من بوابة المحتوى قبل العرض.
+   التخزين: IndexedDB لا localStorage. الحصّة هناك مئات الميغابايت
+   بدل خمسة، وكان الفهرس يمتلئ فيتوقف الحفظ بصمت ويرجع فاضيًا كل
+   جلسة. البيانات القديمة تُنقل تلقائيًا ولا يضيع منها شي.
    ============================================================ */
 
 (function (CS) {
   'use strict';
 
-  var KEY = 'cs.catalog';
-  var VER = 2;
-  /* حد السجلات. القياس الفعلي: ٧٨٥ بايت للسجل (عنوان + ملخّص +
-     وسوم + حقل مطابقة)، فالحد يعني ١٫٣ ميغابايت تقريبًا — ضمن حصة
-     localStorage المعتادة مع مخزون التصنيفات والوسوم، وعند الامتلاء
-     يقصّ الفهرس نفسه نصفين بدل ما يفشل الحفظ بصمت. */
-  var MAX = 1800;
+  var LS_KEY = 'cs.catalog';          /* المخزن القديم — للترحيل فقط */
+  var DB_KEY = 'catalog.v3';
+  var VER = 3;
+  var MAX = 6000;                     /* الحصّة صارت تسمح بفهرس أوسع بكثير */
   var SWEEP_KEY = 'cs.catalog_sweep';
+  var CURSOR_KEY = 'cs.catalog_cursor';   /* أين وقفت آخر كنسة */
   var SWEEP_FULL = 6 * 60 * 60 * 1000;    /* فهرس ناضج: كنس كل ٦ ساعات */
   var SWEEP_WARM = 40 * 60 * 1000;        /* فهرس صغير: كل ٤٠ دقيقة حتى يكبر */
-  var WARM_AT = 500;                      /* بعدها يُعتبر ناضجًا */
+  var WARM_AT = 500;
 
   /* ---------- التخزين ---------- */
 
   function fresh() { return { v: VER, m: {}, n: 0 }; }
 
-  var db = (function () {
-    var raw = CS.store.get(KEY, null);
-    if (!raw || raw.v !== VER || !raw.m || typeof raw.m !== 'object' || Array.isArray(raw.m)) return fresh();
-    raw.n = Object.keys(raw.m).length;
-    /* سجلّات محفوظة بصيغة قديمة (حقل مطابقة بلا مسافات محيطة) */
+  var db = fresh();
+  var loaded = false;
+
+  function upgradeRecords(raw) {
+    if (!raw || !raw.m || typeof raw.m !== 'object' || Array.isArray(raw.m)) return fresh();
     Object.keys(raw.m).forEach(function (k) {
       var r = raw.m[k];
-      if (r && r.q && r.q.charAt(0) !== ' ') { r.q = ' ' + r.q + ' '; }
-      if (r && !r.qt) r.qt = ' ' + norm((r.n || '') + ' ' + (r.o || '')) + ' ';
+      if (!r) { delete raw.m[k]; return; }
+      if (r.q && r.q.charAt(0) !== ' ') r.q = ' ' + r.q + ' ';
+      if (!r.qt) r.qt = ' ' + norm((r.n || '') + ' ' + (r.o || '')) + ' ';
     });
+    raw.v = VER;
+    raw.n = Object.keys(raw.m).length;
     return raw;
-  })();
+  }
+
+  /* التحميل من IndexedDB، ومعه ترحيل ما كان في localStorage */
+  var ready = CS.db.get(DB_KEY).then(function (stored) {
+    if (stored && stored.m) {
+      db = upgradeRecords(stored);
+    } else {
+      var old = CS.store.get(LS_KEY, null);
+      if (old && old.m) {
+        db = upgradeRecords(old);
+        /* ننقل ثم نفرّغ المخزن القديم — الحصّة كانت مخنوقة به */
+        CS.db.set(DB_KEY, db).then(function (ok) {
+          if (ok) CS.store.remove(LS_KEY);
+        });
+      }
+    }
+    loaded = true;
+    return db.n;
+  }).catch(function () { loaded = true; return 0; });
 
   function trimTo(limit) {
     var keys = Object.keys(db.m);
     if (keys.length <= limit) return;
 
-    /* الترتيب بالشهرة وحدها كان يرمي الأعمال المقبولة قبل المرفوضة.
-       المرفوض أولًا (ما يخرج في بحث أبدًا)، ثم المجهول، ثم الأقل شهرة. */
+    /* المرفوض أولًا (ما يخرج في بحث أبدًا)، ثم المجهول، ثم الأقل شهرة */
     function rank(k) {
       var v = CS.certs ? CS.certs.isAdultWork(toItem(db.m[k])) : null;
       return v === false ? 0 : v === null ? 1 : 2;
@@ -71,28 +86,20 @@
     saveTimer = setTimeout(function () {
       trimTo(MAX);
       db.n = Object.keys(db.m).length;
-
-      /* CS.store.set يبلع خطأ امتلاء التخزين بصمت، فالفهرس يوقف عن
-         الحفظ بلا ما يدري أحد ويرجع فاضيًا كل جلسة. نكتب مباشرة
-         ونقصّ النصف عند الامتلاء بدل ما نخسره كله. */
-      for (var attempt = 0; attempt < 3; attempt++) {
-        try {
-          window.localStorage.setItem(KEY, JSON.stringify(db));
-          return;
-        } catch (e) {
-          trimTo(Math.floor(Object.keys(db.m).length / 2));
-          db.n = Object.keys(db.m).length;
-          if (!db.n) return;
-        }
-      }
-    }, 1200);
+      CS.db.set(DB_KEY, db).then(function (ok) {
+        if (ok) return;
+        /* حتى IndexedDB قد ترفض — نقصّ النصف ونعيد مرة واحدة */
+        trimTo(Math.floor(Object.keys(db.m).length / 2));
+        db.n = Object.keys(db.m).length;
+        CS.db.set(DB_KEY, db);
+      });
+    }, 1500);
   }
 
   function keyOf(item) { return (item.type === 'tv' ? 'v' : 'm') + item.id; }
 
   /* ---------- تطبيع النص للمطابقة ---------- */
 
-  /* نفس تطبيع البحث: نزع التشكيل وتوحيد الألف والياء والهاء */
   function norm(str) {
     return String(str || '')
       .toLowerCase()
@@ -100,36 +107,29 @@
       .replace(/[أإآٱ]/g, 'ا')
       .replace(/[ىی]/g, 'ي')
       .replace(/ؤ/g, 'و').replace(/ئ/g, 'ي').replace(/ة/g, 'ه')
+      .replace(/ـ/g, '')
       .replace(/[^\p{L}\p{N}\s]/gu, ' ')
       .replace(/\s+/g, ' ')
       .trim();
   }
 
   /* ------------------------------------------------------------
-     صور الكلمة للمطابقة.
-     القصّ العدواني كان يخرّب أكثر مما يصلح: «فيلم» تصير «يلم»
-     و«فتاة» تصير «تاه» — الفاء والواو حروف أصلية في كلمات كثيرة.
-     البديل: ما نقصّ الكلمة، بل نولّد صورها المحتملة ونقبل مطابقة
-     أي وحدة منها. «والبحر» تُجرَّب كـ«والبحر» و«البحر» و«بحر»،
-     و«فيلم» تبقى «فيلم» ولا تُشوّه.
+     صور الكلمة للمطابقة — ما نقصّ الكلمة، بل نولّد صورها المحتملة
+     ونقبل مطابقة أي وحدة منها.
      ------------------------------------------------------------ */
   function variants(w) {
     var base = String(w || '');
     var out = [base];
 
     if (/[؀-ۿ]/.test(base)) {
-      /* أل التعريف، بمفردها أو بعد لاصقة */
       var noAl = base.replace(/^(?:[وفبكل])?(?:ال)/, '');
       if (noAl && noAl !== base && noAl.length >= 3) out.push(noAl);
-      /* «لل» = اللام + أل */
       var noLil = base.replace(/^لل/, '');
       if (noLil !== base && noLil.length >= 3) out.push(noLil);
-      /* لاصقة مفردة بلا أل — نضيفها صورةً لا نستبدل بها */
       if (base.length >= 5) {
         var noClitic = base.replace(/^[وفبكل]/, '');
         if (noClitic.length >= 4) out.push(noClitic);
       }
-      /* لواحق الجمع والضمائر */
       if (base.length > 5) {
         var noSuffix = base.replace(/(ون|ين|ات|ان|ها|هم|نا|كم)$/, '');
         if (noSuffix.length >= 4 && noSuffix !== base) out.push(noSuffix);
@@ -142,13 +142,10 @@
     return out.filter(function (v, i, a) { return v && a.indexOf(v) === i; });
   }
 
-  /* الصورة الأساسية — تُستعمل مفتاحًا لجدول التكرار */
   function stem(w) { return variants(w)[0]; }
 
   /* ---------- السجل ---------- */
 
-  /* نخزّن ما يلزم للبحث والعرض فقط. البوسترات تُخزَّن كمسار قصير
-     لا كرابط كامل — الرابط يُعاد بناؤه عند القراءة. */
   function shrinkImg(url) {
     var m = /\/([^\/]+\.(?:jpg|png|webp))$/i.exec(String(url || ''));
     return m ? m[1] : '';
@@ -156,10 +153,17 @@
 
   function put(item, extra) {
     if (!item || item.source !== 'tmdb' || !item.id) return;
-    /* الفهرس عضويته مشروطة: العمل اللي البوابة رفضته صراحةً ما يدخل
-       أصلًا. اللي لسه ما وصلت وسومه (null) يدخل مؤقتًا ويُفرز عند
-       البحث — تخزينه مجاني ووسومه تجي لاحقًا. */
-    if (CS.certs && CS.certs.isAdultWork(item) === false) { drop(item); return; }
+    /* العمل اللي البوابة رفضته صراحةً ما يدخل. اللي لسه ما وصلت
+       وسومه يدخل مؤقتًا ويُفرز عند البحث.
+
+       لكن الرفض المبنيّ على سجلّ وسوم ناقص (بذرة كلمة واحدة من
+       الكنس) ما يكفي للطرد: كانت الكنسة العميقة تحذف أعمالًا
+       مقبولة أصلًا فيصغر الفهرس بدل ما يكبر. الناقص يُترك كما هو. */
+    if (CS.certs && CS.certs.isAdultWork(item) === false) {
+      var h0 = CS.certs.cachedHeat(item);
+      if (!h0 || !h0.partial) drop(item);
+      return;
+    }
     var k = keyOf(item);
     var rec = db.m[k] || {};
 
@@ -168,10 +172,8 @@
     rec.n = item.title || rec.n || '';
     rec.o = item.originalTitle || rec.o || '';
     rec.y = item.year || rec.y || null;
-    /* الملخّص هو مادة البحث كلها. TMDB يرجّع ملخّصًا فاضيًا كثيرًا
-       تحت language=ar-SA للأعمال النادرة، فلو خزّنا حقلًا واحدًا
-       صار الفهرس عناوين بلا قصة. نفصل: العربي في d والإنجليزي في e،
-       والاثنان يدخلان حقل المطابقة. */
+
+    /* الملخّص هو مادة البحث كلها — العربي في d والإنجليزي في e */
     var ov = (item.overview || '').trim();
     if (ov) {
       var ar = /[؀-ۿ]/.test(ov);
@@ -185,32 +187,33 @@
     rec.x = Math.max(rec.x || 0, item.popularity || 0);
     if (item.adult) rec.a = 1;
 
+    /* محاور القرب الجديدة: اللغة · الممثلون · المخرج.
+       بدونها ما كان يقدر «أعمال مثل هذا» يقيس على طاقم العمل. */
+    if (item.languageOf || item.originalLanguage) rec.l = item.languageOf || item.originalLanguage;
+    if (item.castIds && item.castIds.length) rec.cr = item.castIds.slice(0, 10);
+    else if (item.cast && item.cast.length) rec.cr = item.cast.map(function (c) { return c.id; }).slice(0, 10);
+    if (item.directors && item.directors.length) rec.dr = item.directors.slice(0, 3);
+
     if (extra && extra.keywords) {
-      /* أسماء الكلمات هي أقوى مادة مطابقة عندنا بعد الملخّص */
       rec.w = extra.keywords.map(function (x) { return x.name || x; })
         .filter(Boolean).slice(0, 24);
     } else {
-      /* الوسوم موجودة أصلًا في مخزون البوابة — العمل ما يدخل الفهرس
-         إلا بعد ما تُسحب. عدم قراءتها هنا كان يترك كل سجل بلا وسوم،
-         فتشابه «ذات صلة» يفقد أقوى إشاراته ويرجع شبه فاضٍ. */
       var h = CS.certs && CS.certs.cachedHeat(item);
       if (h && h.names && h.names.length > (rec.w || []).length) rec.w = h.names.slice(0, 24);
     }
-    if (extra && extra.overviewEn && extra.overviewEn.length > (rec.e || '').length) {
-      rec.e = extra.overviewEn;
-    }
-    if (extra && extra.overviewAr && extra.overviewAr.length > (rec.d || '').length) {
-      rec.d = extra.overviewAr;
-    }
+    if (extra && extra.overviewEn && extra.overviewEn.length > (rec.e || '').length) rec.e = extra.overviewEn;
+    if (extra && extra.overviewAr && extra.overviewAr.length > (rec.d || '').length) rec.d = extra.overviewAr;
+    /* العنوان العربي الرسمي من TMDB — كان يُسحب ويُرمى، فالبحث
+       بالاسم العربي ما يلقى العمل في الفهرس أبدًا */
+    if (extra && extra.titleAr && String(extra.titleAr).trim()) rec.na = String(extra.titleAr).trim();
 
     /* الحقل المطابَق يُبنى مرة وحدة عند الكتابة لا مع كل بحث.
        نحيطه بمسافات ونطابق ببداية الكلمة: indexOf المجرّد كان يخلي
-       «son» تطابق prison و person و lesson، و«حب» تطابق «صاحب». */
-    rec.q = ' ' + norm([rec.n, rec.o, rec.d, rec.e, (rec.w || []).join(' ')].join(' ')) + ' ';
-    rec.qt = ' ' + norm(rec.n + ' ' + rec.o) + ' ';
+       «son» تطابق prison و person. */
+    rec.q = ' ' + norm([rec.n, rec.o, rec.na, rec.d, rec.e, (rec.w || []).join(' '),
+                        (rec.dr || []).join(' ')].join(' ')) + ' ';
+    rec.qt = ' ' + norm([rec.n, rec.o, rec.na].join(' ')) + ' ';
 
-    /* العدّاد يُحدَّث فورًا لا عند الحفظ: persist مؤجَّل ١٢٠٠ملّي، فكان
-       size() يرجّع رقمًا قديمًا وsweep يحسب «ما انضاف شي» وهو أضاف. */
     if (!db.m[k]) db.n = (db.n || 0) + 1;
     db.m[k] = rec;
     persist();
@@ -225,12 +228,8 @@
     (list || []).forEach(function (it) { put(it, extra); });
   }
 
-  /* وسوم العمل تصل متأخرة عن بياناته — نلحقها بالسجل أول ما تجي */
   function attachKeywords(item, keywords) {
     if (!item || !keywords) return;
-    var k = keyOf(item);
-    if (!db.m[k]) { put(item); }
-    if (!db.m[k]) return;
     put(item, { keywords: keywords });
   }
 
@@ -241,20 +240,24 @@
       id: rec.i,
       type: rec.t === 'v' ? 'tv' : 'movie',
       title: rec.n,
+      arTitle: rec.na || '',
       originalTitle: rec.o || '',
       year: rec.y || null,
       date: rec.y ? String(rec.y) : '',
       poster: path ? img(path, CS.config.tmdb.poster.md) : '',
       posterLarge: path ? img(path, CS.config.tmdb.poster.lg) : '',
+      posterPath: path,
       backdrop: '',
       rating: rec.r || 0,
       votes: rec.c || 0,
       popularity: rec.x || 0,
-      /* الملخّص الإنجليزي كان يُخزَّن ولا يُقرأ، فبطاقات الفهرس تطلع
-         بلا سطر قصة أصلًا — وهي أهم ما فيها */
       overview: rec.d || rec.e || '',
       overviewEn: rec.e || '',
       genreIds: rec.g || [],
+      originalLanguage: rec.l || '',
+      languageOf: rec.l || '',
+      castIds: rec.cr || [],
+      directors: rec.dr || [],
       adult: rec.a === 1,
       source: 'tmdb',
       fromCatalog: true
@@ -263,11 +266,6 @@
 
   /* ---------- البحث النصي ---------- */
 
-  /* الكلمة النادرة تدل أكثر من الشائعة: «سفينة» أدل من «رجل».
-     نحسب التكرار داخل الفهرس نفسه — لا جدول ثابت نخترعه. */
-  /* تكرار كل كلمة داخل الفهرس — يُحسب في نفس المرور اللي نبحث فيه.
-     النسخة الأولى كانت تمرّ على كل السجلات مرة لكل كلمة ثم مرة
-     للبحث: سبعة أضعاف العمل على استعلام من ست كلمات. */
   var dfCache = {}, dfStamp = -1;
 
   function dfFor(term) {
@@ -275,14 +273,41 @@
     return dfCache[term];
   }
 
+  /* مفردات الفهرس — تُستعمل لتصحيح الأخطاء الإملائية */
+  var vocabCache = null, vocabStamp = -1;
+
+  function vocabulary() {
+    if (vocabCache && vocabStamp === db.n) return vocabCache;
+    var seen = {};
+    var out = [];
+    Object.keys(db.m).forEach(function (k) {
+      var rec = db.m[k];
+      (rec.qt || '').split(' ').forEach(function (w) {
+        if (w.length < 4 || seen[w]) return;
+        seen[w] = 1; out.push(w);
+      });
+      (rec.w || []).forEach(function (name) {
+        String(name || '').toLowerCase().split(/\s+/).forEach(function (w) {
+          if (w.length < 4 || seen[w]) return;
+          seen[w] = 1; out.push(w);
+        });
+      });
+    });
+    vocabCache = out.slice(0, 6000);
+    vocabStamp = db.n;
+    return vocabCache;
+  }
+
   /**
-   * search(terms, opts) → [{ item, score, hits }]
+   * search(terms, opts) → قائمة أعمال مرتّبة
    * terms: كلمات الوصف بعد التنظيف (عربي و/أو إنجليزي)
    * opts.phrase: الجملة كاملة — تطابقها الحرفي أقوى دليل ممكن
+   * opts.fuzzy: نسامح الأخطاء الإملائية (الافتراضي: نعم)
    */
   function search(terms, opts) {
     opts = opts || {};
-    /* كل مصطلح يصير مجموعة صور، والمطابقة على أي وحدة منها */
+    var fuzzyOn = opts.fuzzy !== false && !!CS.fuzzy;
+
     var list = [];
     (terms || []).forEach(function (t) {
       var n = norm(t);
@@ -298,7 +323,6 @@
     var phrase = opts.phrase ? norm(opts.phrase) : '';
     var out = [];
 
-    /* مرور واحد: نجمع التكرار والمطابقات معًا، ثم نزن بالتكرار بعده */
     var known = list.every(function (t) { return dfFor(t.key) !== undefined; });
     var df = {};
     list.forEach(function (t) { df[t.key] = known ? dfCache[t.key] : 0; });
@@ -309,26 +333,41 @@
       var hay = rec.q || '';
       if (!hay) return;
 
-      /* دفاع في العمق: حتى لو دخل سجل قبل ما نعرف وسومه، ما يخرج
-         من البحث إلا إذا البوابة قالت نعم صراحةً */
+      /* دفاع في العمق: ما يخرج من البحث إلا ما قالت البوابة نعم له */
       var it0 = toItem(rec);
       if (CS.certs && CS.certs.isAdultWork(it0) !== true) return;
       if (CS.certs && CS.certs.kindFits && CS.certs.kindFits(it0) === false) return;
 
-      var hits = [], inTitle = {};
+      var hits = [], inTitle = {}, fuzzyHits = 0, exactHits = 0;
       var titleHay = rec.qt || (' ' + norm(rec.n + ' ' + rec.o) + ' ');
       list.forEach(function (t) {
         /* بداية الكلمة لا وسطها — يسمح بالسوابق واللواحق ويمنع
            «son» من مطابقة «prison». أي صورة من صور المصطلح تكفي. */
         var hit = t.forms.some(function (f) { return hay.indexOf(' ' + f) !== -1; });
-        if (!hit) return;
+        var weight = hit ? 1 : 0;
+
+        /* ما لقينا الكلمة حرفيًا؟ نجرّب قريبها — خطأ إملائي بحرف
+           أو حرفين كان يرجّع صفرًا من الفهرس كله */
+        if (!weight && fuzzyOn && t.key.length >= 4) {
+          weight = CS.fuzzy.inText(hay, t.key);
+          if (weight) fuzzyHits++;
+        }
+        if (!weight) return;
+
+        if (hit) exactHits++;
         hits.push(t.key);
+        t.w = weight;
         if (!known) df[t.key] = (df[t.key] || 0) + 1;
         if (t.forms.some(function (f) { return titleHay.indexOf(' ' + f) !== -1; })) inTitle[t.key] = true;
       });
       if (!hits.length) return;
 
-      raw.push({ rec: rec, hits: hits, inTitle: inTitle,
+      /* حاجز ضد إيجابية التقريب الكاذبة: استعلام هراء («zqxwv plurgh»)
+         كان يلقى «قريبًا» من كلمة أو كلمتين فيرجّع نتائج بلا معنى.
+         التقريب وحده ما يكفي إلا إذا غطّى أغلب كلمات الاستعلام. */
+      if (!exactHits && hits.length / list.length < 0.6) return;
+
+      raw.push({ rec: rec, hits: hits, inTitle: inTitle, fuzzy: fuzzyHits,
                  phraseHit: !!(phrase && phrase.length >= 14 && hay.indexOf(phrase) !== -1) });
     });
 
@@ -340,30 +379,24 @@
         /* وزن معكوس التكرار: كلمة في ١٪ من الفهرس تساوي أضعاف كلمة في نصفه */
         var idf = Math.log((total + 1) / ((df[t] || 0) + 1)) + 1;
         score += idf * 10;
-        /* الكلمة في العنوان ترجّح قليلًا فقط: ٦ أضعاف كانت تقلب
-           البحث بالوصف إلى بحث بالاسم — عمل اسمه فيه كلماتك يتقدّم
-           على عمل قصته هي وصفك بالضبط */
         if (r.inTitle[t]) titleAdd += idf * 2.2;
       });
 
-      /* سقف لمساهمة العنوان كلها — ما تتجاوز خُمس درجة الجسد */
+      /* المطابقة التقريبية تُحتسب أقل من الحرفية — دليل أضعف */
+      if (r.fuzzy) score *= (1 - Math.min(0.3, r.fuzzy * 0.1));
+
       score += Math.min(titleAdd, score * 0.2);
 
-      /* تغطية الوصف: عمل يحمل ٤ من ٥ كلمات أقوى بكثير من واحد يحمل ١ */
       var cov = r.hits.length / list.length;
       score *= (0.45 + cov * 1.55);
       if (r.hits.length >= 3) score += 28;
       if (r.hits.length >= 5) score += 34;
 
-      /* التطابق الحرفي للجملة دليل قوي لكنه ما يلغي التغطية:
-         ٢٦٠ نقطة كانت تخلي مطابقة عرَضية واحدة تتصدّر على عمل
-         يجمع كل كلمات الوصف. صار مضاعفًا مشروطًا بالتغطية. */
       if (r.phraseHit && cov >= 0.5) score += 60 + cov * 90;
 
-      /* الشهرة ترجّح قليلًا عند التساوي، وما تقلب الترتيب */
       score += Math.min(8, Math.log10((r.rec.x || 0) + 1) * 3.2);
 
-      out.push({ rec: r.rec, score: score, hits: r.hits, coverage: cov });
+      out.push({ rec: r.rec, score: score, hits: r.hits, coverage: cov, fuzzy: r.fuzzy });
     });
 
     out.sort(function (a, b) { return b.score - a.score; });
@@ -372,27 +405,16 @@
       item.catalogScore = r.score;
       item.catalogHits = r.hits;
       item.catalogCoverage = r.coverage;
+      item.catalogFuzzy = r.fuzzy;
       return item;
     });
   }
 
   /* ------------------------------------------------------------
-     الأعمال ذات الصلة — من الفهرس، بتشابه حقيقي.
-     ترشيحات TMDB لعمل إيروتيكي نادر رديئة أصلًا (مبنيّة على شهرة
-     ومشاهدات لا على محتوى)، وبعد ما تمرّ من البوابة ما يبقى منها
-     إلا عمل أو اثنان بلا علاقة. الفهرس عندنا مئات الأعمال المقبولة
-     مع وسومها وملخّصاتها، فالتشابه يُحسب فعليًا:
-
-       ١) الوسوم المشتركة، موزونة بندرتها — «nunsploitation» تدل
-          أضعاف ما تدل «nudity» لأن الأخيرة على كل عمل تقريبًا.
-       ٢) تقاطع كلمات القصة بين الملخّصين.
-       ٣) النوع، ثم قرب السنة — مرجّحات لا أساس.
+     الأعمال ذات الصلة من الفهرس — القياس صار في reco.js على ستة
+     محاور. هنا نجهّز المرشّحين ونمرّرهم له.
      ------------------------------------------------------------ */
 
-  /* عتبة «الوسم النادر»: تحتها الوسم شائع فمشاركته لا تدل */
-  var RARE_IDF = 2.2;
-
-  /* تكرار كل وسم داخل الفهرس — يُحسب مرة ويُعاد بناؤه لما يكبر */
   var kwDf = null, kwDfStamp = -1;
 
   function keywordDf() {
@@ -408,12 +430,11 @@
     return kwDf;
   }
 
-  /* كلمات القصة الدالة — نفس تطبيع البحث، بلا كلمات الحشو */
   var PLOT_STOP = (' the a an of in on at to for and or but is are was were be been with from by '
     + 'that this these those his her its their he she they it as into over under about after his '
     + 'her when where who while them him them one two his own new life world man woman young '
     + 'في من على عن الى مع بعد قبل عند كل بعض غير هو هي هم التي الذي هذا هذه ذلك تلك بين ثم لكن '
-    + 'حياة عالم رجل امراه شاب فتاه سنه عام قصه فيلم مسلسل ').split(/\s+/);
+    + 'حياه عالم رجل امراه شاب فتاه سنه عام قصه فيلم مسلسل ').split(/\s+/);
 
   function plotTerms(text, cap) {
     var seen = {}, out = [];
@@ -428,20 +449,15 @@
   }
 
   /**
-   * similarTo(base, opts) → قائمة أعمال مرتّبة بالأقرب
-   * base: عمل فيه keywords و overview (صفحة العمل تعطيهما معًا)
-   * opts.limit · opts.exclude (مفاتيح نستبعدها)
+   * candidates(base, opts) — المرشّحون من الفهرس، مقصوصون مبدئيًا
+   * بوسم أو كلمة قصة مشتركة، عشان reco.js ما يقيس على الفهرس كله.
    */
-  function similarTo(base, opts) {
+  function candidates(base, opts) {
     opts = opts || {};
     if (!base) return [];
-
     var selfKey = keyOf(base);
     var exclude = opts.exclude || {};
-    var df = keywordDf();
-    var total = Math.max(1, db.n || Object.keys(db.m).length);
 
-    /* وسوم العمل: من التفاصيل مباشرة، وإلا من سجلّه في الفهرس */
     var rec0 = db.m[selfKey];
     var baseKw = {};
     ((base.keywords && base.keywords.length ? base.keywords.map(function (k) { return k.name; })
@@ -453,11 +469,14 @@
     var baseTerms = plotTerms(
       (base.overview || '') + ' ' + ((rec0 && (rec0.d || '')) || '') + ' ' + ((rec0 && (rec0.e || '')) || ''),
       26);
-    var baseGenres = base.genreIds || (rec0 && rec0.g) || [];
-    var kwNames = Object.keys(baseKw);
+    var basePeople = {};
+    ((base.castIds && base.castIds.length) ? base.castIds : ((rec0 && rec0.cr) || []))
+      .forEach(function (id) { basePeople[id] = true; });
+    var baseDirs = (base.directors && base.directors.length ? base.directors : ((rec0 && rec0.dr) || []))
+      .map(function (d) { return String(d).toLowerCase(); });
 
-    /* بلا وسوم ولا قصة ما فيه شي نقيس عليه */
-    if (!kwNames.length && !baseTerms.length) return [];
+    var kwNames = Object.keys(baseKw);
+    if (!kwNames.length && !baseTerms.length && !baseDirs.length && !Object.keys(basePeople).length) return [];
 
     var out = [];
     Object.keys(db.m).forEach(function (k) {
@@ -467,76 +486,36 @@
       if (CS.certs && CS.certs.isAdultWork(it0) !== true) return;
       if (CS.certs && CS.certs.kindFits && CS.certs.kindFits(it0) === false) return;
 
-      var score = 0, why = [];
+      /* قصّ رخيص: لازم إشارة واحدة على الأقل قبل القياس الكامل */
+      var touch = (rec.w || []).some(function (n) { return baseKw[String(n).toLowerCase()]; }) ||
+                  (rec.cr || []).some(function (id) { return basePeople[id]; }) ||
+                  (rec.dr || []).some(function (d) { return baseDirs.indexOf(String(d).toLowerCase()) !== -1; }) ||
+                  baseTerms.some(function (t) { return (rec.q || '').indexOf(' ' + t) !== -1; });
+      if (!touch) return;
 
-      /* ١) الوسوم المشتركة موزونة بالندرة */
-      var kwHits = 0, bestIdf = 0;
-      (rec.w || []).forEach(function (n) {
-        var t = String(n || '').toLowerCase();
-        if (!baseKw[t]) return;
-        kwHits++;
-        var idf = Math.log((total + 1) / ((df[t] || 0) + 1)) + 1;
-        if (idf > bestIdf) bestIdf = idf;
-        score += 14 * idf;
-        if (why.length < 4) why.push(t);
-      });
-      /* التقاطع نفسه إشارة: وسمان مشتركان أقوى من ضعف وسم واحد */
-      if (kwHits > 1) score += (kwHits - 1) * 18;
-
-      /* ٢) تقاطع كلمات القصة */
-      var hay = rec.q || '';
-      var termHits = 0;
-      baseTerms.forEach(function (t) {
-        if (hay.indexOf(' ' + t) === -1) return;
-        termHits++;
-        score += 7;
-      });
-      if (termHits > 2) score += (termHits - 2) * 6;
-
-      /* أرضية الصلة: وسم عام واحد مشترك ما يكفي. «erotica» على نصف
-         الكتالوج، فمشاركتها لا تجعل العملين متشابهين. المطلوب إما
-         وسمان، أو وسم نادر، أو تقاطع حقيقي في القصة. */
-      var weak = kwHits < 2 && termHits < 2 && bestIdf < RARE_IDF;
-      if ((!kwHits && termHits < 2) || weak) return;
-
-      /* ٣) مرجّحات */
-      var g = rec.g || [];
-      var sharedG = g.filter(function (x) { return baseGenres.indexOf(x) !== -1; }).length;
-      score += sharedG * 4;
-      if (rec.y && base.year) score -= Math.min(7, Math.abs(rec.y - base.year) / 7);
-      score += Math.min(5, Math.log10((rec.x || 0) + 1) * 2);
-
-      out.push({ rec: rec, score: score, kwHits: kwHits, termHits: termHits, why: why });
+      out.push(it0);
     });
+    return out.slice(0, opts.limit || 400);
+  }
 
-    out.sort(function (a, b) { return b.score - a.score; });
-
-    return out.slice(0, opts.limit || 200).map(function (r) {
-      var item = toItem(r.rec);
-      item.relScore = r.score;
-      item.relKw = r.why;
-      item.relKwHits = r.kwHits;
-      item.relTermHits = r.termHits;
-      return item;
-    });
+  /* التوافق للخلف: similarTo كانت تقيس بنفسها، الآن تمرّ من reco */
+  function similarTo(base, opts) {
+    var cands = candidates(base, opts);
+    if (!cands.length) return [];
+    if (!CS.reco) return cands;
+    return CS.reco.rank(base, cands, { exclude: (opts && opts.exclude) || {}, keepWeak: false })
+      .slice(0, (opts && opts.limit) || 200);
   }
 
   /* ---------- الكنس: توسيع الفهرس في الخلفية ---------- */
 
   var sweeping = false;
-  var inFlight = null;         /* الكنسة الجارية — نشاركها بدل ما نرفض */
-  var round = 0;               /* كل كنسة تحرث أرضًا جديدة لا نفس الأرض */
-  var sweptThisLoad = false;   /* كنسة واحدة لكل فتحة صفحة مهما تنقّلت */
+  var inFlight = null;
+  var round = 0;
+  var sweptThisLoad = false;
 
-  /**
-   * يوسّع الفهرس بصفحات من كتالوج الكبار.
-   * ما ينادى إلا على فترات — الهدف تغطية أوسع للبحث لا تحميل الصفحة.
-   */
   function sweep(force) {
     if (!CS.hasKey()) return Promise.resolve(0);
-
-    /* كنسة جارية؟ نرجّع نفسها بدل صفرٍ فوري. الضغط على زرّ الفهرس
-       أثناء كنسة الخلفية كان يرجع بلا شي فيبان الزرّ معطّلًا. */
     if (sweeping && inFlight) return inFlight;
     if (sweeping) return Promise.resolve(0);
     if (!force && sweptThisLoad) return Promise.resolve(0);
@@ -553,29 +532,35 @@
     inFlight = CS.feed.keywordIds('general').then(function (ids) {
       if (!ids || !ids.length) { sweeping = false; inFlight = null; return 0; }
 
-      /* كل نداء بكلمة واحدة لا باتحاد كلمات. الفرق جوهري:
-         العمل الراجع من with_keywords=<id> واحد يحمل تلك الكلمة
-         قطعًا، فنعرف وسمه مجانًا بلا طلب /keywords لكل عمل.
-         الاتحاد كان يرجّع أعمالًا ما ندري أي كلمة جابتها. */
-      var names = CS.feed.keywordNames ? CS.feed.keywordNames('general') : {};
-
-      /* حجم الكنسة يتبع نضج الفهرس: الزيارات الأولى توسّع بجدّية،
-         وبعد ما يكبر تكفي جولة خفيفة تلتقط الجديد. */
+      var names = CS.feed.keywordNames ? CS.feed.keywordNames() : {};
       var mature = db.n >= WARM_AT;
       var SORTS = ['popularity.desc', 'vote_count.desc', 'primary_release_date.desc',
                    'vote_average.desc', 'revenue.desc'];
 
-      /* كل جولة تنقل الترتيب والصفحة. بدونها كانت الكنسة الثانية تطلب
-         نفس الروابط حرفيًا، فتُخدَم من ذاكرة الطلبات وترجع نفس الأعمال
-         وما يزيد الفهرس شيئًا — والزرّ يبان كأنه ما سوّى شي. */
+      /* مؤشّر محفوظ: كل كنسة تبدأ من حيث وقفت السابقة بدل ما تعيد
+         حرث أول ثماني كلمات إلى الأبد. كانت الكنستان المتتاليتان
+         تكلّفان ٧٠ طلبًا وتضيفان صفرًا. */
       round++;
-      var pageBase = 1 + ((round - 1) * 2) % 8;
+      var cursor = CS.store.get(CURSOR_KEY, { kw: 0, page: 0 });
+      if (!cursor || typeof cursor !== 'object') cursor = { kw: 0, page: 0 };
+
+      var take = mature ? 10 : 16;
+      var start = (cursor.kw || 0) % ids.length;
+      var slice = [];
+      for (var s = 0; s < Math.min(take, ids.length); s++) slice.push(ids[(start + s) % ids.length]);
+
+      var pageBase = 1 + ((cursor.page || 0) % 10);
       var plan = [];
-      ids.slice(0, mature ? 8 : 14).forEach(function (id, i) {
+      slice.forEach(function (id, i) {
         var sortBy = SORTS[(i + round) % SORTS.length];
         plan.push({ type: 'movie', id: id, sort_by: sortBy, page: pageBase });
         if (!mature) plan.push({ type: 'movie', id: id, sort_by: sortBy, page: pageBase + 1 });
         if (i % 2 === 0) plan.push({ type: 'tv', id: id, sort_by: sortBy, page: 1 + (round % 3) });
+      });
+
+      CS.store.set(CURSOR_KEY, {
+        kw: (start + slice.length) % ids.length,
+        page: (cursor.page || 0) + (start + slice.length >= ids.length ? 1 : 0)
       });
 
       var before = db.n;
@@ -590,24 +575,20 @@
     return inFlight;
   }
 
-  /* جالب واحد لكل مهمة كنس — تستعمله الكنسة العادية والعميقة */
   function harvest(job, names) {
     var q = {
       with_keywords: String(job.id),
-      /* الملخّص الإنجليزي هو مادة البحث: TMDB يرجّع ملخّصًا فاضيًا
-         تحت ar-SA لأغلب هذي الأعمال، فالكنس يطلب الإنجليزي صراحةً
-         ويخزّنه في حقل منفصل عن العربي. */
+      /* TMDB يرجّع ملخّصًا فاضيًا تحت ar-SA لأغلب هذي الأعمال، فالكنس
+         يطلب الإنجليزي صراحةً ويخزّنه في حقل منفصل عن العربي */
       language: 'en-US',
       sort_by: job.type === 'tv' && job.sort_by === 'primary_release_date.desc'
         ? 'first_air_date.desc' : job.sort_by
     };
-    /* الترتيب بالتقييم بلا حد أصوات يرفع أعمالًا بصوت واحد */
     if (job.sort_by === 'vote_average.desc') q['vote_count.gte'] = 15;
     return CS.tmdb.discover(job.type, q, job.page)
       .then(function (list) {
         var name = names[job.id];
         (list || []).forEach(function (it) {
-          /* دليل المصدر: هذا العمل يحمل هذي الكلمة، بلا طلب */
           if (name && CS.certs.seedKeyword) CS.certs.seedKeyword(it, name);
         });
         add(list);
@@ -617,12 +598,7 @@
   }
 
   /**
-   * تحديث قوي — كنسة أوسع من الزرّ العادي:
-   *   · كلمات القسمين (عام + صريح) لا العام وحده
-   *   · خمس ترتيبات لكل كلمة بدل ترتيب واحد
-   *   · صفحتان مختلفتان لكل كلمة + مسلسلات
-   *   · تتجاوز المهلة الزمنية وحدّ الجلسة لأنها بطلب صريح من المستخدم
-   * الهدف: مادة أحدث وأوسع للبحث بوصف القصة، وبوسترات أكثر للفهرس.
+   * تحديث قوي — كنسة أوسع من الزرّ العادي.
    */
   function deepSweep() {
     if (!CS.hasKey() || !CS.feed) return Promise.resolve(0);
@@ -642,23 +618,27 @@
       });
       if (!ids.length) { sweeping = false; inFlight = null; return 0; }
 
-      var names = {};
-      ['general', 'explicit'].forEach(function (tab) {
-        var map = CS.feed.keywordNames ? CS.feed.keywordNames(tab) : {};
-        Object.keys(map || {}).forEach(function (k) { names[k] = map[k]; });
-      });
+      var names = CS.feed.keywordNames ? CS.feed.keywordNames() : {};
 
       var SORTS = ['popularity.desc', 'vote_count.desc', 'primary_release_date.desc',
                    'vote_average.desc', 'revenue.desc'];
       round++;
+      /* الخطة كانت ١٢٦ نداء استكشاف من ضغطة واحدة — ومعها ترطيب
+         البطاقات تجاوز الطلبات ٢٨٠. الحدّ هنا صريح، والجولة القادمة
+         تكمّل من حيث وقفت هذي بفضل المؤشّر المحفوظ. */
+      var DEEP_MAX = 28;
+      var cur = CS.store.get(CURSOR_KEY, { kw: 0, page: 0 });
+      var from = (cur && cur.kw) || 0;
       var plan = [];
-      ids.slice(0, 18).forEach(function (id, i) {
-        SORTS.forEach(function (sortBy, j) {
-          plan.push({ type: 'movie', id: id, sort_by: sortBy, page: 1 + ((round + i + j) % 6) });
-        });
-        plan.push({ type: 'tv', id: id, sort_by: 'popularity.desc', page: 1 + ((round + i) % 4) });
-        plan.push({ type: 'tv', id: id, sort_by: 'first_air_date.desc', page: 1 + ((round + i) % 3) });
-      });
+      for (var i = 0; i < ids.length && plan.length < DEEP_MAX; i++) {
+        var id = ids[(from + i) % ids.length];
+        for (var j = 0; j < SORTS.length && plan.length < DEEP_MAX; j++) {
+          plan.push({ type: 'movie', id: id, sort_by: SORTS[j], page: 1 + ((round + i + j) % 6) });
+        }
+        if (plan.length < DEEP_MAX) plan.push({ type: 'tv', id: id, sort_by: 'popularity.desc', page: 1 + ((round + i) % 4) });
+        if (plan.length < DEEP_MAX) plan.push({ type: 'tv', id: id, sort_by: 'first_air_date.desc', page: 1 + ((round + i) % 3) });
+      }
+      CS.store.set(CURSOR_KEY, { kw: (from + Math.ceil(DEEP_MAX / 7)) % ids.length, page: (cur && cur.page) || 0 });
 
       var before = db.n;
       return CS.util.pool(plan, 5, function (job) {
@@ -673,11 +653,15 @@
   }
 
   CS.catalog = {
+    ready: ready,
+    loaded: function () { return loaded; },
     add: add,
     drop: drop,
     put: put,
     attachKeywords: attachKeywords,
     search: search,
+    vocabulary: vocabulary,
+    candidates: candidates,
     similarTo: similarTo,
     plotTerms: plotTerms,
     keywordIdf: function (name) {
@@ -694,7 +678,14 @@
     norm: norm,
     stem: stem,
     variants: variants,
-    clear: function () { db = fresh(); CS.store.set(KEY, db); CS.store.remove(SWEEP_KEY); }
+    clear: function () {
+      db = fresh();
+      dfCache = {}; dfStamp = -1; kwDf = null; kwDfStamp = -1; vocabCache = null; vocabStamp = -1;
+      CS.db.set(DB_KEY, db);
+      CS.store.remove(SWEEP_KEY);
+      CS.store.remove(CURSOR_KEY);
+      CS.store.remove(LS_KEY);
+    }
   };
 
 })(window.CS);

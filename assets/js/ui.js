@@ -1,5 +1,9 @@
 /* ============================================================
-   ui.js — بناء الواجهة: البطاقات، صفحة العمل، صفحة الشخص
+   ui.js — بناء الواجهة: البطاقات، صفحة العمل، الحلقات، المكتبة،
+           صفحة الشخص، وصفحة الإعدادات.
+
+   كل نص يمرّ من esc()، وكل صورة لها مسار بديل ثم بديل نصّي —
+   فما فيه صورة مكسورة ولا حقن HTML من بيانات المصادر.
    ============================================================ */
 
 (function (CS) {
@@ -7,7 +11,20 @@
 
   var esc = CS.util.esc;
   var TYPE_AR = { movie: 'فيلم', tv: 'مسلسل' };
-  var WHY_CLASS = { plot: 'is-plot', theme: 'is-theme', related: 'is-theme', title: '' };
+
+  /* البرامج الواقعية والحوارية مسلسلات عند TMDB، لكن تسميتها
+     «مسلسل» على البطاقة كذب صغير — نفرّقها بنوعها السينمائي */
+  var REALITY_GENRES = [10764, 10767];
+
+  function typeLabel(item) {
+    if (!item) return '';
+    if (item.type === 'tv' && (item.genreIds || []).some(function (g) {
+      return REALITY_GENRES.indexOf(g) !== -1;
+    })) return 'برنامج';
+    return TYPE_AR[item.type] || '';
+  }
+  var WHY_CLASS = { plot: 'is-plot', theme: 'is-theme', related: 'is-theme',
+                    catalog: 'is-plot', person: 'is-person', title: '' };
 
   /* ---------- التوست ---------- */
 
@@ -18,15 +35,31 @@
     el.textContent = msg;
     el.hidden = false;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(function () { el.hidden = true; }, 2600);
+    toastTimer = setTimeout(function () { el.hidden = true; }, 2800);
   }
 
   function skeletons(n) {
     var out = '';
     for (var i = 0; i < n; i++) {
-      out += '<div class="skel"><div class="skel__poster"></div><div class="skel__line"></div><div class="skel__line"></div></div>';
+      out += '<div class="skel" aria-hidden="true"><div class="skel__poster"></div>' +
+             '<div class="skel__line"></div><div class="skel__line"></div></div>';
     }
     return out;
+  }
+
+  function skelRow(n) {
+    var out = '';
+    for (var i = 0; i < (n || 8); i++) {
+      out += '<div class="skel skel--row" aria-hidden="true"><div class="skel__poster"></div>' +
+             '<div class="skel__line"></div></div>';
+    }
+    return out;
+  }
+
+  /* شريط تحميل نصّي — يستعمله كل قسم غير متزامن */
+  function loading(label) {
+    return '<div class="loading" role="status"><span class="loading__dot"></span>' +
+           '<span>' + esc(label || 'يحمّل…') + '</span></div>';
   }
 
   /* ---------- مفاتيح وعناصر ---------- */
@@ -38,47 +71,63 @@
     return item.type + '/' + item.id;
   }
 
+  /* ------------------------------------------------------------
+     الصورة: المضيف الأصلي ← المضيف البديل ← بديل نصّي.
+     المعالجة في app.js بمستمع واحد على مستوى الصفحة (بلا onerror
+     داخل السمة)، فالبطاقة ما تطلع أبدًا بأيقونة صورة مكسورة.
+     ------------------------------------------------------------ */
+  function imgTag(url, alt, cls, extra) {
+    if (!url) return '';
+    var fb = CS.tmdb.imgAlt(url);
+    return '<img' + (cls ? ' class="' + esc(cls) + '"' : '') +
+      ' src="' + esc(url) + '"' +
+      (fb && fb !== url ? ' data-fallback="' + esc(fb) + '"' : '') +
+      ' alt="' + esc(alt || '') + '" loading="lazy" decoding="async"' +
+      (extra || '') + '>';
+  }
+
   function posterHtml(item) {
     if (item.poster) {
-      return '<img src="' + esc(item.poster) + '" alt="بوستر ' + esc(item.title) + '" loading="lazy" decoding="async">';
+      return imgTag(item.poster, 'بوستر ' + (item.title || ''), '',
+        ' width="342" height="513"');
     }
-    return '<div class="card__ph"><b>' + (item.type === 'tv' ? '📺' : '🎬') + '</b><span>' + esc(item.title) + '</span></div>';
+    return placeholder(item);
+  }
+
+  function placeholder(item) {
+    return '<div class="card__ph"><b>' + (item.type === 'tv' ? '📺' : '🎬') + '</b>' +
+           '<span>' + esc(item.title || 'بلا صورة') + '</span></div>';
   }
 
   function scoreClass(r) { return r >= 7.5 ? 'is-high' : r > 0 && r < 5.5 ? 'is-low' : ''; }
 
   function certBadge(item) {
     var info = CS.certs.cachedFor(item);
-    /* نتيجة من ويكيبيديا ما لها معرّف TMDB فما لها تصنيف — نقولها بصراحة
-       بدل ما نعرضها كأنها مصنّفة أو نخفيها بلا سبب */
     if (!info && item.source === 'wiki') {
       return '<span class="card__cert card__cert--unknown" ' +
-        'title="نتيجة من ويكيبيديا بلا مقابل في TMDB — تصنيفها العمري غير معروف">؟ غير مصنّف</span>';
+        'title="نتيجة من ويكيبيديا بلا مقابل في TMDB — تصنيفها العمري غير معروف">؟</span>';
     }
     if (!info) return '';
     var t = CS.certs.tierInfo(info.tier);
-    var text = info.tier === 5 ? '🔥 إباحي' : (t.emoji + ' ' + t.short);
+    var text = info.tier === 5 ? '🔥' : (t.emoji + ' ' + t.short);
     var title = info.tier === 5 ? 'معلَّم adult عند TMDB'
               : t.label + (info.cert ? ' · ' + info.cert + (info.country ? ' (' + info.country + ')' : '') : '');
-    return '<span class="card__cert" style="border-color:' + esc(t.color) + '55;color:' + esc(t.color) +
+    return '<span class="card__cert" style="--cc:' + esc(t.color) +
            '" title="' + esc(title) + '">' + text + '</span>';
   }
 
-  /* شارة نوع المحتوى — إلزامية على كل بوستر في الموقع.
-     قبل ما توصل بيانات العمل تعرض «⏳ …» وتُستبدل فور وصولها،
-     فما فيه بوستر يطلع بلا شارة في أي صفحة. */
+  /* شارة نوع المحتوى — إلزامية على كل بوستر في الموقع */
   function kindBadge(item) {
     var k = CS.certs.contentKind(item);
     if (!k) {
       return '<span class="card__kind card__kind--wait" ' +
-        'title="نوع المحتوى يُسحب من TMDB الآن">⏳ …</span>';
+        'title="نوع المحتوى يُسحب من TMDB الآن">⏳</span>';
     }
     var i = CS.certs.kindInfo(k);
     return '<span class="card__kind card__kind--' + k + '" style="--kc:' + esc(i.color) + '" ' +
       'title="' + esc(i.why) + '">' + i.emoji + ' ' + i.ar + '</span>';
   }
 
-  /* شريط الحسّية — مبني على وسوم TMDB الحقيقية، لا على نسبة مخترعة */
   function heatBar(item) {
     var h = item.heat;
     if (!h || !h.score) return '';
@@ -86,18 +135,28 @@
            '"><i style="width:' + h.score + '%"></i></div>';
   }
 
-  /* نسبة التطابق — في البحث تعني قرب النتيجة من استعلامك،
-     وفي بقية الصفحات تعني قربها من ذوقك المبني على تصويتك */
   function matchBadge(item) {
     if (!item.matchPct) return '';
-    /* الرقم حقيقي دائمًا، وكلمته تتبع أساسه فما نوهم المستخدم بشي */
     var quality = item.matchBasis === 'quality';
     var why = item.why === 'related' ? 'قربه من العمل اللي فتحته'
             : quality ? 'قوة الترشيح: تقييمه وعدد مصوّتيه وشهرته — صوّت على أعمال وبتتحوّل لتطابق ذوقك'
+            : item.matchWhy && item.matchWhy.length ? 'يطابق ذوقك في: ' + item.matchWhy.join('، ')
             : item.whyText ? 'قربه من بحثك'
             : 'تطابقه مع ذوقك حسب تصويتك';
     return '<span class="card__match' + (item.matchPct >= 85 ? ' is-top' : '') +
-      '" title="' + esc(why) + '">' + (quality ? 'مرشّح ' : 'مطابق ') + item.matchPct + '٪</span>';
+      '" title="' + esc(why) + '">' + (quality ? 'مرشّح ' : '') + item.matchPct + '٪</span>';
+  }
+
+  /* علامة التقدّم — «وصلت م٢ ح٥» على بوستر عمل بدأته */
+  function progressBadge(item) {
+    if (!CS.library) return '';
+    var p = CS.library.progress.get(item);
+    if (!p) return '';
+    if (p.done) return '<span class="card__prog is-done" title="خلّصته">✓</span>';
+    if (p.season != null) {
+      return '<span class="card__prog" title="آخر ما وصلت له">م' + p.season + ' ح' + (p.episode || 1) + '</span>';
+    }
+    return '<span class="card__prog" title="بدأته">▶</span>';
   }
 
   function voteBar(item, big) {
@@ -114,32 +173,53 @@
       '</div>';
   }
 
+  /* أزرار المكتبة: مفضلة · لاحقًا — على كل بطاقة */
+  function libBar(item) {
+    if (!CS.library || item.source !== 'tmdb') return '';
+    var k = esc(itemKey(item));
+    var isFav = CS.library.fav.has(item);
+    var isLater = CS.library.later.has(item);
+    return '<div class="libbar">' +
+      '<button class="libbar__b' + (isFav ? ' is-on' : '') + '" data-lib-toggle="fav" data-item="' + k + '" ' +
+        'aria-pressed="' + (isFav ? 'true' : 'false') + '" title="المفضلة" aria-label="أضف للمفضلة">⭐</button>' +
+      '<button class="libbar__b' + (isLater ? ' is-on' : '') + '" data-lib-toggle="later" data-item="' + k + '" ' +
+        'aria-pressed="' + (isLater ? 'true' : 'false') + '" title="أشوفه لاحقًا" aria-label="أشوفه لاحقًا">🕗</button>' +
+    '</div>';
+  }
+
   /* ---------- البطاقة ---------- */
 
   function card(item) {
     var sub = [];
     if (item.year) sub.push(item.year);
-    sub.push(TYPE_AR[item.type] || '');
+    sub.push(typeLabel(item));
     if (item.source === 'wiki') sub.push('ويكيبيديا');
+    if (item.personRole) sub.push(item.personRole);
 
     var plot = (item.overview || item.plotSnippet || '').trim();
     var why = item.whyText
       ? '<span class="card__why ' + (WHY_CLASS[item.why] || '') + '">' + esc(item.whyText) + '</span>' : '';
-    var tags = (item.heat && item.heat.tags.length)
+    var tags = (item.heat && item.heat.tags && item.heat.tags.length)
       ? '<div class="card__tags">' + item.heat.tags.slice(0, 3).map(function (t) {
           return '<span class="card__tag">' + esc(t) + '</span>';
         }).join('') + '</div>' : '';
 
+    var k = esc(itemKey(item));
+
     return '' +
-      '<article class="card" data-key="' + esc(itemKey(item)) + '">' +
-        '<a class="card__link" href="#/work/' + esc(itemKey(item)) + '" data-open="' + esc(itemKey(item)) + '">' +
+      '<article class="card" data-key="' + k + '">' +
+        '<a class="card__link" href="#/work/' + k + '" data-open="' + k + '">' +
           '<div class="card__poster">' + posterHtml(item) +
-            (item.rating ? '<span class="card__score ' + scoreClass(item.rating) + '">' + item.rating.toFixed(1) + '</span>' : '') +
-            '<span class="card__type">' + (TYPE_AR[item.type] || '') + '</span>' +
-            matchBadge(item) + certBadge(item) + kindBadge(item) + heatBar(item) +
-            /* «مثله» — يقلب الشبكة لأقرب الأعمال بلا ما تفتح صفحة العمل */
+            '<div class="card__row card__row--top">' +
+              (item.rating ? '<span class="card__score ' + scoreClass(item.rating) + '">' + item.rating.toFixed(1) + '</span>' : '<span></span>') +
+              '<span class="card__type">' + esc(typeLabel(item)) + '</span>' +
+            '</div>' +
+            '<div class="card__row card__row--bottom">' +
+              certBadge(item) + kindBadge(item) + progressBadge(item) + matchBadge(item) +
+            '</div>' +
+            heatBar(item) +
             (item.source === 'tmdb'
-              ? '<button class="card__like" data-similar="' + esc(itemKey(item)) + '" ' +
+              ? '<button class="card__like" data-similar="' + k + '" ' +
                 'title="أعمال مثل هذا" aria-label="أعمال مثل هذا">🎯</button>'
               : '') +
           '</div>' +
@@ -150,11 +230,43 @@
             tags + why +
           '</div>' +
         '</a>' +
+        libBar(item) +
         voteBar(item, false) +
       '</article>';
   }
 
-  function cards(list) { return list.map(card).join(''); }
+  function cards(list) { return (list || []).map(card).join(''); }
+
+  /* ---------- الصفوف الجاهزة ---------- */
+
+  function shelf(conf) {
+    /* conf: { id, title, note, items, loading, empty } */
+    if (conf.loading) {
+      return '<section class="shelf" data-shelf="' + esc(conf.id) + '">' +
+        '<h3 class="sec__title">' + esc(conf.title) + '</h3>' +
+        '<div class="shelf__rail">' + skelRow(8) + '</div></section>';
+    }
+    if (!conf.items || !conf.items.length) return '';
+    return '<section class="shelf" data-shelf="' + esc(conf.id) + '">' +
+      '<h3 class="sec__title">' + esc(conf.title) +
+        (conf.note ? '<span class="sec__note">' + esc(conf.note) + '</span>' : '') + '</h3>' +
+      '<div class="shelf__rail">' + cards(conf.items) + '</div>' +
+    '</section>';
+  }
+
+  /* ---------- مسار التنقّل ---------- */
+
+  function crumbs(path) {
+    if (!path || path.length < 2) return '';
+    return '<ol class="crumbs__list">' + path.map(function (p, i) {
+      var last = i === path.length - 1;
+      var label = esc(p.label);
+      return '<li class="crumbs__i">' +
+        (last || !p.hash ? '<span aria-current="page">' + label + '</span>'
+                         : '<a href="' + esc(p.hash) + '">' + label + '</a>') +
+        '</li>';
+    }).join('') + '</ol>';
+  }
 
   /* ---------- الروابط الخارجية ---------- */
 
@@ -173,8 +285,7 @@
       .filter(function (g) { return g[1] && g[1].length; });
     if (!groups.length) return '';
 
-    /* بيانات التوفّر من TMDB مصدرها JustWatch، وشروط TMDB تُلزم بنسبها
-       لـJustWatch مع كل عمل لا مرة واحدة في التذييل — وإلا يُسحب الوصول */
+    /* شروط TMDB تُلزم بنسب بيانات التوفّر لـJustWatch مع كل عمل */
     var credit = '<p class="prov__credit">مصدر بيانات التوفّر: ' +
       '<a href="https://www.justwatch.com/" target="_blank" rel="noopener noreferrer">JustWatch</a>' +
       (p.link ? ' · <a href="' + esc(p.link) + '" target="_blank" rel="noopener noreferrer">كل المنصّات</a>' : '') +
@@ -183,7 +294,7 @@
     return '<div class="prov">' + groups.map(function (g) {
       return '<div class="prov__g"><span class="prov__lbl">' + g[0] + '</span>' +
         g[1].map(function (x) {
-          return '<img src="' + esc(x.logo) + '" alt="' + esc(x.name) + '" title="' + esc(x.name) + '" loading="lazy">';
+          return imgTag(x.logo, x.name, '', ' title="' + esc(x.name) + '" width="42" height="42"');
         }).join('') + '</div>';
     }).join('') + credit + '</div>';
   }
@@ -199,6 +310,10 @@
     extra = extra || {};
     var short = extra.summary || '';
     var plot = extra.plotArabic || extra.fullPlot || '';
+
+    if (extra.loadingPlot && !short && !plot) {
+      return '<h3 class="sec__title">القصة الكاملة</h3>' + loading('يجيب القصة من ويكيبيديا…');
+    }
 
     var story = short;
     if (plot) {
@@ -217,13 +332,13 @@
     if (extra.plotArabic) src.push('القصة من ويكيبيديا (ترجمة آلية)');
     else if (extra.fullPlot) src.push('القصة من ويكيبيديا (' + (plotIsArabic ? 'عربي' : 'إنجليزي') + ')');
     if (extra.translating) src.push('⏳ يترجم…');
-    if (src.length) html += '<p class="overview__src">🔸 ' + src.join(' · ') + '</p>';
+    if (src.length) html += '<p class="overview__src">🔸 ' + esc(src.join(' · ')) + '</p>';
 
     if (extra.fullPlot && !extra.plotArabic && !plotIsArabic && CS.state.lang === 'ar' && !extra.translating) {
       html += '<div class="dt__actions"><button class="btn btn--ghost btn--sm" data-translate-plot>' +
               '🔤 ترجم القصة الكاملة للعربية</button></div>';
     }
-    if (extra.plotError) html += '<p class="overview__src">🔴 ' + esc(extra.plotError) + '</p>';
+    if (extra.plotError) html += '<p class="msg msg--warn">🟡 ' + esc(extra.plotError) + '</p>';
 
     return '<h3 class="sec__title">القصة الكاملة</h3>' + html;
   }
@@ -233,9 +348,6 @@
   function extraSources(d, ex) {
     ex = ex || {};
     var blocks = '';
-
-    /* تقييمات OMDb انمسحت من هنا: صارت تتكرّر حرفيًا مع بطاقة OMDb
-       في «بيانات إضافية» اللي يتحكّم فيها المشغّل بنفسه */
 
     if (ex.tvmaze) {
       var t = ex.tvmaze, r2 = '';
@@ -248,6 +360,59 @@
     }
 
     return blocks;
+  }
+
+  /* ---------- المواسم والحلقات ---------- */
+
+  function seasonsSection(d, view) {
+    if (d.type !== 'tv' || !d.seasonList || !d.seasonList.length) return '';
+    view = view || {};
+    var active = view.season != null ? view.season : (d.seasonList[0] || {}).number;
+
+    var picker = '<div class="seasons">' + d.seasonList.map(function (s) {
+      return '<button class="season' + (s.number === active ? ' is-on' : '') + '" ' +
+        'data-season="' + s.number + '" type="button">' +
+        esc(s.name) + '<i>' + s.count + ' حلقة</i></button>';
+    }).join('') + '</div>';
+
+    var body;
+    if (view.loading) body = loading('يجيب حلقات الموسم…');
+    else if (view.error) body = '<p class="msg msg--bad">🔴 ' + esc(view.error) + '</p>';
+    else if (!view.episodes || !view.episodes.length) body = '<p class="msg">⚪ ما فيه حلقات مسجّلة لهذا الموسم.</p>';
+    else body = episodeList(d, view.episodes);
+
+    var prog = CS.library ? CS.library.progress.get(d) : null;
+    var resume = prog && prog.season != null
+      ? '<p class="sec__note">آخر ما وصلت له: م' + prog.season + ' ح' + (prog.episode || 1) +
+        ' · ' + esc(CS.util.ago(prog.at)) + '</p>' : '';
+
+    return '<h3 class="sec__title">المواسم والحلقات ' +
+      '<span class="sec__note">' + d.seasons + ' موسم · ' + d.episodes + ' حلقة</span></h3>' +
+      resume + picker + '<div class="eps" id="dt-eps">' + body + '</div>';
+  }
+
+  function episodeList(d, eps) {
+    return eps.map(function (e) {
+      var seen = CS.library ? CS.library.progress.episodeSeen(d, e.season, e.number) : false;
+      return '<article class="ep' + (seen ? ' is-seen' : '') + '">' +
+        '<div class="ep__still">' +
+          (e.still ? imgTag(e.still, e.name, '', ' width="300" height="169"')
+                   : '<div class="ep__ph">' + e.number + '</div>') +
+        '</div>' +
+        '<div class="ep__body">' +
+          '<h4 class="ep__t"><b>' + e.number + '.</b> ' + esc(e.name) + '</h4>' +
+          '<p class="ep__meta">' +
+            [e.airdate ? CS.util.date(e.airdate) : '', e.runtime ? e.runtime + ' د' : '',
+             e.rating ? '★ ' + e.rating : ''].filter(Boolean).map(esc).join(' · ') +
+          '</p>' +
+          (e.overview ? '<p class="ep__plot">' + esc(e.overview) + '</p>' : '') +
+        '</div>' +
+        '<button class="ep__mark" data-mark-ep="' + e.season + ':' + e.number + '" ' +
+          'aria-pressed="' + (seen ? 'true' : 'false') + '" ' +
+          'title="' + (seen ? 'وصلت هنا' : 'علّم إنك وصلت لهذي الحلقة') + '">' +
+          (seen ? '✓' : '○') + '</button>' +
+      '</article>';
+    }).join('');
   }
 
   /* ---------- صفحة العمل ---------- */
@@ -267,67 +432,70 @@
 
     if (d.rating) facts.push('<span class="fact fact--score">★ ' + d.rating.toFixed(1) + (d.votes ? ' · ' + d.votes.toLocaleString('en-US') : '') + '</span>');
     if (d.year)   facts.push('<span class="fact">' + d.year + '</span>');
-    facts.push('<span class="fact">' + (TYPE_AR[d.type] || '') + '</span>');
+    facts.push('<span class="fact">' + esc(typeLabel(d)) + '</span>');
     if (d.runtime) facts.push('<span class="fact">' + esc(CS.util.minutes(d.runtime)) + '</span>');
     if (d.seasons) facts.push('<span class="fact">' + d.seasons + ' موسم · ' + d.episodes + ' حلقة</span>');
 
     var certInfo = CS.certs.cachedFor(d);
     if (certInfo) {
       var ct = CS.certs.tierInfo(certInfo.tier);
-      facts.push('<span class="fact" style="border-color:' + esc(ct.color) + '66;color:' + esc(ct.color) + '">' +
+      facts.push('<span class="fact" style="--fc:' + esc(ct.color) + '">' +
         ct.emoji + ' ' + esc(ct.label) + (certInfo.cert && certInfo.tier !== 5 ? ' · ' + esc(certInfo.cert) : '') + '</span>');
     }
-    /* نوع المحتوى بالعربي — نفس شارة البوستر، حاضرة هنا كمان */
     var dk = CS.certs.contentKind(d);
     if (dk) {
       var dki = CS.certs.kindInfo(dk);
-      facts.push('<span class="fact fact--kind" style="border-color:' + esc(dki.color) +
-        '66;color:' + esc(dki.color) + '" title="' + esc(dki.why) + '">' +
-        dki.emoji + ' ' + dki.ar + '</span>');
+      facts.push('<span class="fact fact--kind" style="--fc:' + esc(dki.color) +
+        '" title="' + esc(dki.why) + '">' + dki.emoji + ' ' + dki.ar + '</span>');
     }
     (d.genres || []).forEach(function (g) { facts.push('<span class="fact">' + esc(g) + '</span>'); });
     if (d.directors && d.directors.length) facts.push('<span class="fact">🎬 ' + esc(d.directors.join('، ')) + '</span>');
     if (d.countries && d.countries.length) facts.push('<span class="fact">' + esc(d.countries.slice(0, 2).join('، ')) + '</span>');
 
-    /* وسوم العمل — كلمات TMDB المفتاحية كما هي بالإنجليزي.
-       هذي هي تصنيف العمل الحقيقي: sea battle · time loop · heist …
-       والوسوم الحسّاسة تتلوّن بلون مختلف لكنها تشتغل بنفس الطريقة. */
+    /* وسوم العمل — كلمات TMDB المفتاحية كما هي */
     var heatHtml = '';
     var hot = (d.heat && d.heat.tags) || [];
     var kws = (d.keywords || []).map(function (k) { return k.name; })
       .filter(function (n) { return n && String(n).length <= 34; });
 
-    /* الحسّاسة أولًا ثم البقية، بلا تكرار */
     var allTags = hot.concat(kws).filter(function (t, i, a) {
       return a.map(function (x) { return String(x).toLowerCase(); })
               .indexOf(String(t).toLowerCase()) === i;
     }).slice(0, 18);
 
     if (allTags.length) {
+      /* الوسوم الحسّية (heat.tags) أسماء موحَّدة نصنعها نحن في
+         certs.heatOf — «softcore» و«erotica» تصيران وسمًا واحدًا
+         «erotic». الضغط عليها كان يبحث عن كلمة مفتاحية بهذا الاسم
+         عند TMDB فترجع صفحة فاضية. فصارت شارات لا روابط، والقابل
+         للضغط هو الكلمة المفتاحية الحقيقية وحدها. */
       heatHtml = '<section><h3 class="sec__title">الوسوم ' +
-        '<span class="sec__note">اضغط أي وسم يجيب لك كل الأعمال اللي تحمله</span></h3>' +
+        '<span class="sec__note">الوسوم البرتقالية كلمات TMDB الحقيقية — اضغطها تجيب كل أعمالها</span></h3>' +
         '<div class="tags">' + allTags.map(function (t) {
           var isHot = hot.some(function (h) { return String(h).toLowerCase() === String(t).toLowerCase(); });
+          var real = kws.some(function (k) { return String(k).toLowerCase() === String(t).toLowerCase(); });
+          var label = '#' + esc(String(t).replace(/\s+/g, '-'));
+          if (!real) {
+            return '<span class="tag tag--heat" title="وسم محتوى من تصنيفنا، مو كلمة مفتاحية عند TMDB">' +
+              label + '</span>';
+          }
           return '<a class="tag' + (isHot ? ' tag--heat' : ' tag--kw') + '" href="#/tag/' +
-            esc(encodeURIComponent(t)) + '" data-tag="' + esc(t) + '">#' +
-            esc(String(t).replace(/\s+/g, '-')) + '</a>';
+            esc(encodeURIComponent(t)) + '" data-tag="' + esc(t) + '">' + label + '</a>';
         }).join('') + '</div></section>';
     }
 
     var castHtml = (d.cast && d.cast.length)
       ? '<div class="cast">' + d.cast.map(function (c) {
           return '<a class="cast__p" href="#/person/' + esc(c.id) + '" data-person="' + esc(c.id) + '">' +
-            (c.photo ? '<img src="' + esc(c.photo) + '" alt="' + esc(c.name) + '" loading="lazy">' : '<div class="cast__ph">👤</div>') +
+            (c.photo ? imgTag(c.photo, c.name, '', ' width="185" height="185"') : '<div class="cast__ph">👤</div>') +
             '<b>' + esc(c.name) + '</b>' + (c.role ? '<span>' + esc(c.role) + '</span>' : '') + '</a>';
         }).join('') + '</div>' : '';
 
-
     var provHtml = providersHtml(d.providers);
+    var k = esc(itemKey(d));
 
-    /* أزرار المشاهدة السريعة فوق */
+    /* أزرار المشاهدة السريعة */
     var watchName = d.originalTitle || d.title;
-    /* Nuvio يفتح بتطبيق سطح المكتب مباشرة عبر مخطّطه nuvio://
-       (المخطّط والقواعد من DeepLinkParser في مستودع Nuvio نفسه) */
     var watchBtns =
       '<a class="linkbtn linkbtn--hero linkbtn--app" href="' + esc(CS.links.nuvio(d)) + '">' +
         '<span class="linkbtn__dot" style="background:#22d3ee"></span>Nuvio</a>' +
@@ -338,9 +506,26 @@
         'href="https://yandex.com/search/?text=' + encodeURIComponent(watchName + ' ' + (d.year || '') + ' online') + '">' +
         '<span class="linkbtn__dot" style="background:#fc3f1d"></span>Yandex</a>';
 
+    /* أزرار المكتبة الكبيرة */
+    var inFav = CS.library.fav.has(d), inLater = CS.library.later.has(d), inFollow = CS.library.follow.has(d);
+    var prog = CS.library.progress.get(d);
+    var libBtns =
+      '<button class="btn btn--ghost' + (inFav ? ' is-on' : '') + '" data-lib-toggle="fav" data-item="' + k + '">' +
+        (inFav ? '⭐ في المفضلة' : '☆ أضف للمفضلة') + '</button>' +
+      '<button class="btn btn--ghost' + (inLater ? ' is-on' : '') + '" data-lib-toggle="later" data-item="' + k + '">' +
+        (inLater ? '🕗 في قائمة لاحقًا' : '🕗 أشوفه لاحقًا') + '</button>' +
+      (d.type === 'tv'
+        ? '<button class="btn btn--ghost' + (inFollow ? ' is-on' : '') + '" data-lib-toggle="follow" data-item="' + k + '">' +
+          (inFollow ? '🔔 متابَع' : '🔕 تابع الجديد') + '</button>'
+        : '') +
+      (d.type === 'movie'
+        ? '<button class="btn btn--ghost' + (prog && prog.done ? ' is-on' : '') + '" data-mark-done="' + k + '">' +
+          (prog && prog.done ? '✓ شفته' : '○ علّم إني شفته') + '</button>'
+        : '');
+
     return '' +
       '<div class="dt__hero">' +
-        '<div class="dt__backdrop">' + (d.backdrop ? '<img src="' + esc(d.backdrop) + '" alt="" loading="lazy">' : '') + '</div>' +
+        '<div class="dt__backdrop">' + (d.backdrop ? imgTag(d.backdrop, '', '', ' width="1280" height="720"') : '') + '</div>' +
         '<button class="dt__close" data-back aria-label="رجوع">&#8594;</button>' +
       '</div>' +
 
@@ -355,59 +540,68 @@
           (d.tagline ? '<p class="dt__tagline">«' + esc(d.tagline) + '»</p>' : '') +
           '<div class="dt__facts">' + facts.join('') + '</div>' +
           '<div class="dt__actions">' + voteBar(d, true) +
-            '<button class="btn btn--ghost" data-share="' + esc(itemKey(d)) + '">🔗 انسخ الرابط</button>' +
+            '<button class="btn btn--ghost" data-share="' + k + '">🔗 شارك</button>' +
           '</div>' +
+          '<div class="dt__actions">' + libBtns + '</div>' +
           '<div class="dt__actions">' + watchBtns + '</div>' +
         '</div>' +
       '</div>' +
 
       '<div class="dt__body">' +
         '<section id="dt-story">' + storySection(d, extra) + '</section>' +
+        (d.type === 'tv' ? '<section id="dt-seasons">' + seasonsSection(d, { loading: true }) + '</section>' : '') +
         heatHtml +
         (provHtml ? '<section><h3 class="sec__title">وين تشوفه <span class="sec__note">(' + esc(CS.state.region) + ')</span></h3>' + provHtml + '</section>' : '') +
         '<section id="dt-datasources"></section>' +
         '<section id="dt-links">' + linksHtml(d) + '</section>' +
         (castHtml ? '<section><h3 class="sec__title">طاقم العمل <span class="sec__note">اضغط أي اسم لأعماله</span></h3>' + castHtml + '</section>' : '') +
         '<section id="dt-extra"></section>' +
-        '<section id="dt-related"></section>' +
+        '<section id="dt-related">' + relatedSection([], false, true, 0) + '</section>' +
       '</div>';
   }
 
   /* قسم الأعمال ذات الصلة مع «اعرض المزيد» */
-  function relatedSection(items, exhausted, loading, total) {
+  function relatedSection(items, exhausted, loadingNow, total) {
+    if (loadingNow && (!items || !items.length)) {
+      return '<h3 class="sec__title">أعمال ذات صلة</h3><div class="grid">' + skeletons(6) + '</div>';
+    }
     if (!items.length) return '';
-    /* العدد يقول المعروض من الكل، لا المعروض وحده — «٢٤ عمل» على
-       بركة فيها ١٨٠ يخفي إن فيه المزيد */
     var n = total && total > items.length
       ? items.length + ' من ' + total + ' عمل'
       : items.length + ' عمل';
-    return '<h3 class="sec__title">أعمال ذات صلة <span class="sec__note">' + n + '</span></h3>' +
+    return '<h3 class="sec__title">أعمال ذات صلة <span class="sec__note">' + esc(n) +
+      ' · القرب من الوسوم والقصة والمخرج والممثلين واللغة والفترة</span></h3>' +
       '<div class="grid">' + cards(items) + '</div>' +
       (exhausted ? '' :
         '<div class="loadmore"><button class="btn btn--ghost" data-related-more ' +
-        (loading ? 'disabled' : '') + '>' + (loading ? '⏳ يحمّل…' : 'اعرض المزيد') + '</button></div>');
+        (loadingNow ? 'disabled' : '') + '>' + (loadingNow ? '⏳ يحمّل…' : 'اعرض المزيد') + '</button></div>');
   }
 
   /* ---------- صفحة الشخص ---------- */
 
   function person(p, shown) {
-    var meta = [p.job, p.birthday ? 'مواليد ' + p.birthday : '', p.place].filter(Boolean).join(' · ');
+    var meta = [p.job === 'Directing' ? 'مخرج' : p.job === 'Acting' ? 'ممثل' : p.job,
+                p.birthday ? 'مواليد ' + p.birthday : '',
+                p.deathday ? 'توفّي ' + p.deathday : '',
+                p.place].filter(Boolean).join(' · ');
     var list = p.works.slice(0, shown);
 
     return '' +
       '<div class="dt__hero"><div class="dt__backdrop"></div>' +
         '<button class="dt__close" data-back aria-label="رجوع">&#8594;</button></div>' +
       '<div class="person__head">' +
-        (p.photo ? '<img class="person__photo" src="' + esc(p.photo) + '" alt="' + esc(p.name) + '">'
+        (p.photo ? imgTag(p.photo, p.name, 'person__photo', ' width="185" height="185"')
                  : '<div class="person__photo cast__ph">👤</div>') +
         '<div><h2 class="person__name">' + esc(p.name) + '</h2>' +
         (meta ? '<p class="person__meta">' + esc(meta) + '</p>' : '') +
-        '<p class="person__meta">' + p.works.length + ' عمل</p></div>' +
+        '<p class="person__meta">' + p.works.length + ' عمل' +
+          (p.directedCount ? ' · ' + p.directedCount + ' إخراجًا' : '') + '</p></div>' +
       '</div>' +
       '<div class="dt__body">' +
         (p.bio ? '<section><h3 class="sec__title">نبذة</h3><p class="overview">' + esc(p.bio) + '</p></section>' : '') +
         '<section><h3 class="sec__title">أعماله</h3>' +
-          '<div class="grid">' + cards(list) + '</div>' +
+          (list.length ? '<div class="grid">' + cards(list) + '</div>'
+                       : '<p class="msg">⚪ ما فيه أعمال لهذا الشخص داخل محتوى الموقع.</p>') +
           (shown < p.works.length
             ? '<div class="loadmore"><button class="btn" data-person-more>اعرض المزيد</button>' +
               '<p class="loadmore__note">' + shown + ' من ' + p.works.length + '</p></div>' : '') +
@@ -415,43 +609,47 @@
       '</div>';
   }
 
-  /* ---------- حالات فارغة ---------- */
+  /* ---------- حالات فارغة وأخطاء ---------- */
+
+  function errorHtml(title, detail, actions) {
+    return '<b>🔴 ' + esc(title) + '</b><p>' + esc(detail || '') + '</p>' +
+      (actions ? '<div class="empty__acts">' + actions + '</div>' : '');
+  }
 
   function emptyHtml(query, meta) {
     meta = meta || {};
     if (meta.tmdbError) {
-      return '<b>🔴 TMDB ما رد</b><p>' + esc(meta.tmdbError) + '</p>' +
-        '<div style="margin-top:1.2rem"><button class="btn" data-diagnose>🔍 افحص الاتصال</button></div>' +
-        '<p style="margin-top:1rem;font-size:.82rem">🟢 البحث بوصف القصة عبر ويكيبيديا يضل شغّالًا.</p>';
+      return errorHtml('TMDB ما رد', meta.tmdbError,
+        '<button class="btn" data-diagnose>🔍 افحص الاتصال</button>' +
+        '<button class="btn btn--ghost" data-retry-search>أعد المحاولة</button>') +
+        '<p class="empty__note">🟢 البحث بوصف القصة عبر ويكيبيديا يضل شغّالًا.</p>';
     }
     var tips = [
       'اكتب المشهد اللي تذكره بالتفصيل: «رجل يجلس على كرسي متحرك ويراقب جيرانه».',
       'جرّب زر «ترجم EN» جنب البحث — تغطية ويكيبيديا الإنجليزية أوسع بكثير.',
       'اذكر أسماء الممثلين أو المخرج لو تذكرها.'
     ];
-    var head = '<b>🔴 ما لقيت شي لـ «' + esc(query) + '»</b>';
+    var head = '<b>🔎 ما لقيت شي لـ «' + esc(query) + '»</b>';
 
-    /* لو البوابة هي اللي فرّغت النتيجة نقولها صراحة — الفرق مهم:
-       «ما فيه عمل بهذا الوصف» غير «فيه أعمال بس ما هي محتوى جنسي» */
+    if (meta.corrections && meta.corrections.length) {
+      tips.unshift('جرّبت كمان: ' + meta.corrections.map(function (c) { return c.to; }).join('، ') +
+                   ' — ولا واحدة طلعت بنتيجة.');
+    }
     if (meta.gateIn && !meta.gateOut) {
       return head +
         '<p>وصلت ' + meta.gateIn + ' نتيجة، وكلها طلعت خارج المحتوى الجنسي فانحجبت. ' +
         'الموقع ما يعرض إلا الأعمال اللي TMDB وسمها بمحتوى جنسي.</p>' +
-        '<p style="margin-top:.8rem">جرّب توصف المشهد نفسه بتفصيل أكثر، أو اكتبه بالإنجليزي.</p>';
+        '<p class="empty__note">جرّب توصف المشهد نفسه بتفصيل أكثر، أو اكتبه بالإنجليزي.</p>';
     }
     if (meta.catalogSize !== undefined && meta.catalogSize < 150) {
       tips.unshift('الفهرس المحلي لسه صغير (' + meta.catalogSize + ' عمل) — تصفّح الأقسام شوي ' +
                    'وبيكبر تلقائيًا، والبحث بالوصف بيصير أدق.');
     }
-    return head + '<p>جرّب كذا:</p><ul><li>' + tips.join('</li><li>') + '</li></ul>';
+    return head + '<p>جرّب كذا:</p><ul><li>' + tips.map(esc).join('</li><li>') + '</li></ul>';
   }
 
-  /* قسم المشاهدة من مصادر المشغّل */
-  /* بيانات إضافية من مصادر المشغّل.
-     المزوّدون يكرّرون بعض: MDBList وOMDb يعطيان تقييم IMDb نفسه.
-     فندمج الكل في جدول واحد، كل قياس مرة وحدة، ومكتوب جنبه من وين جاء. */
+  /* ---------- بيانات إضافية من مصادر المشغّل ---------- */
 
-  /* ترتيب العرض، وأي اسم يقابل أي قياس */
   var METRICS = [
     'تقييم IMDb', 'أصوات IMDb', 'روتن توميتوز', 'ميتاكريتيك', 'تريكت', 'تقييم Trakt',
     'ليتربوكسد', 'نقاد روجر إيبرت', 'تقييم Simkl', 'التقييم', 'عدد الأصوات', 'عدد المقيّمين',
@@ -468,19 +666,17 @@
   function dataSection(blocks) {
     if (!blocks || !blocks.length) return '';
 
-    var loading = blocks.filter(function (b) { return b.loading; });
+    var loadingBlocks = blocks.filter(function (b) { return b.loading; });
     var skipped = blocks.filter(function (b) { return !b.loading && !b.ok && /^يحتاج /.test(b.detail || ''); });
     var failed  = blocks.filter(function (b) { return !b.loading && !b.ok && skipped.indexOf(b) === -1; });
     var okBlocks = blocks.filter(function (b) { return b.ok && b.rows && b.rows.length; });
 
-    /* ندمج: أول مزوّد يعطي القياس هو المرجع، والباقي يُذكرون كمصادر مؤكِّدة */
     var merged = {}, order = [];
     okBlocks.forEach(function (b) {
       b.rows.forEach(function (r) {
         var label = String(r[0]), value = String(r[1]);
         if (!merged[label]) { merged[label] = { value: value, from: [b.name] }; order.push(label); }
         else if (merged[label].from.indexOf(b.name) === -1) {
-          /* نفس القياس بقيمة مختلفة؟ نبيّن الاختلاف بدل ما نخفيه */
           if (merged[label].value !== value) merged[label].alt = merged[label].alt || [];
           if (merged[label].value !== value) merged[label].alt.push(b.name + ': ' + value);
           merged[label].from.push(b.name);
@@ -492,8 +688,9 @@
 
     var rows = order.map(function (label) {
       var m = merged[label];
-      var v = /^https?:\/\//.test(m.value)
-        ? '<a href="' + esc(m.value) + '" target="_blank" rel="noopener noreferrer">' + esc(m.value) + '</a>'
+      var safe = CS.util.safeUrl(m.value);
+      var v = safe
+        ? '<a href="' + esc(safe) + '" target="_blank" rel="noopener noreferrer">' + esc(safe) + '</a>'
         : esc(m.value);
       return '<div class="mrow"><span class="mrow__k">' + esc(label) + '</span>' +
         '<b class="mrow__v">' + v + '</b>' +
@@ -504,7 +701,7 @@
     }).join('');
 
     var notes = [];
-    if (loading.length) notes.push('⏳ ' + loading.map(function (b) { return esc(b.name); }).join('، '));
+    if (loadingBlocks.length) notes.push('⏳ ' + loadingBlocks.map(function (b) { return esc(b.name); }).join('، '));
     if (failed.length) notes.push('🔴 ' + failed.map(function (b) {
       return esc(b.name) + ' (' + esc(b.detail || 'ما رد') + ')';
     }).join('، '));
@@ -524,22 +721,33 @@
   CS.ui = {
     dataSection: dataSection,
     toast: toast,
+    loading: loading,
     skeletons: skeletons,
+    skelRow: skelRow,
     card: card,
     cards: cards,
+    shelf: shelf,
+    crumbs: crumbs,
     detail: detail,
     detailSkeleton: detailSkeleton,
     storySection: storySection,
+    seasonsSection: seasonsSection,
+    episodeList: episodeList,
     relatedSection: relatedSection,
     extraSources: extraSources,
     person: person,
     emptyHtml: emptyHtml,
+    errorHtml: errorHtml,
     itemKey: itemKey,
+    imgTag: imgTag,
     linksHtml: linksHtml,
     voteBar: voteBar,
+    libBar: libBar,
     certBadge: certBadge,
     kindBadge: kindBadge,
-    TYPE_AR: TYPE_AR
+    progressBadge: progressBadge,
+    TYPE_AR: TYPE_AR,
+    typeLabel: typeLabel
   };
 
 })(window.CS);

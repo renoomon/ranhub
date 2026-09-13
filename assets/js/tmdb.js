@@ -1,19 +1,23 @@
 /* ============================================================
-   tmdb.js — عميل TMDB (يدعم مفتاح v3 وتوكن v4)
+   tmdb.js — عميل TMDB (يدعم مفتاح v3 وتوكن v4، ووسيطًا يخفيهما)
+
+   كل الطلبات تمرّ من CS.net، فتأخذ منه: ذاكرة على القرص، منع
+   التكرار الطائر، سقف معدّل، وتراجعًا أسّيًا عند 429.
    ============================================================ */
 
 (function (CS) {
   'use strict';
 
   var CFG = CS.config.tmdb;
-  var cache = {};
 
   /* توكن v4 عبارة عن JWT فيه نقطتين وطويل، ومفتاح v3 هاش 32 خانة */
-  function isV4(key) { return key.split('.').length === 3 && key.length > 100; }
+  function isV4(key) { return String(key).split('.').length === 3 && String(key).length > 100; }
 
   function langTag() { return CS.state.lang === 'ar' ? 'ar-SA' : 'en-US'; }
 
   function buildUrl(path, params) {
+    var proxy = CS.proxyBase();
+    var base = proxy ? proxy + '/3' : CFG.base;
     var key = CS.state.apiKey || '';
     var qs = [];
     params = params || {};
@@ -24,9 +28,10 @@
       if (v === undefined || v === null || v === '') return;
       qs.push(encodeURIComponent(k) + '=' + encodeURIComponent(v));
     });
-    if (key && !isV4(key)) qs.push('api_key=' + encodeURIComponent(key));
+    /* مع الوسيط ما نرسل المفتاح إطلاقًا — هو عند الخادم */
+    if (!proxy && key && !isV4(key)) qs.push('api_key=' + encodeURIComponent(key));
 
-    return CFG.base + path + (qs.length ? '?' + qs.join('&') : '');
+    return base + path + (qs.length ? '?' + qs.join('&') : '');
   }
 
   /* ---------- الطلب الأساسي ---------- */
@@ -36,23 +41,22 @@
     if (!CS.hasKey()) return Promise.reject(new Error('NO_KEY'));
 
     var url = buildUrl(path, params);
-    if (!opts.fresh && cache[url]) return Promise.resolve(cache[url]);
-
     var headers = { accept: 'application/json' };
     var key = CS.state.apiKey;
-    if (isV4(key)) headers.Authorization = 'Bearer ' + key;
+    if (!CS.usingProxy() && isV4(key)) headers.Authorization = 'Bearer ' + key;
 
-    return fetch(url, { headers: headers })
-      .then(function (res) {
-        if (res.status === 401) throw new Error('BAD_KEY');
-        if (res.status === 429) throw new Error('RATE_LIMIT');
-        if (!res.ok) throw new Error('HTTP_' + res.status);
-        return res.json();
-      })
-      .then(function (json) {
-        cache[url] = json;
-        return json;
-      });
+    return CS.net.json(url, {
+      headers: headers,
+      fresh: !!opts.fresh,
+      persist: opts.persist !== undefined ? opts.persist : CS.net.shouldPersist(path),
+      ttl: opts.ttl,
+      retries: opts.retries
+    }).catch(function (err) {
+      /* نوحّد الرسائل عشان explain() يعرفها */
+      var m = (err && err.message) || '';
+      if (m === 'BAD_KEY' || m === 'RATE_LIMIT' || m === 'TIMEOUT' || /^HTTP_/.test(m)) throw err;
+      throw err;
+    });
   }
 
   /* ---------- الصور ---------- */
@@ -60,6 +64,12 @@
   function img(path, size) {
     if (!path) return '';
     return CFG.img + '/' + size + path;
+  }
+
+  /* نفس الصورة من المضيف البديل — الواجهة تجرّبه لو الأول سقط */
+  function imgAlt(url) {
+    if (!url) return '';
+    return String(url).replace(CFG.img, CFG.imgAlt);
   }
 
   /* ---------- توحيد شكل العنصر ---------- */
@@ -82,12 +92,14 @@
       year: CS.util.year(date),
       poster: img(raw.poster_path, CFG.poster.md),
       posterLarge: img(raw.poster_path, CFG.poster.lg),
+      posterPath: raw.poster_path || '',
       backdrop: img(raw.backdrop_path, CFG.backdrop.lg),
       rating: raw.vote_average ? Math.round(raw.vote_average * 10) / 10 : 0,
       votes: raw.vote_count || 0,
       popularity: raw.popularity || 0,
       overview: raw.overview || '',
       genreIds: raw.genre_ids || (raw.genres || []).map(function (g) { return g.id; }),
+      originalLanguage: raw.original_language || '',
       adult: raw.adult === true,
       source: 'tmdb'
     };
@@ -147,19 +159,31 @@
   }
 
   /* بحث بالاسم في اللغتين — أساسي للاستعلامات العربية */
-  function searchTitleBoth(query) {
+  function searchTitleBoth(query, page) {
     return Promise.all([
-      req('/search/movie', { query: query, include_adult: allowAdult(), page: 1 })
+      req('/search/movie', { query: query, include_adult: allowAdult(), page: page || 1 })
         .then(function (j) { return normalizeList(j.results, 'movie'); }).catch(function () { return []; }),
-      req('/search/tv', { query: query, include_adult: allowAdult(), page: 1 })
+      req('/search/tv', { query: query, include_adult: allowAdult(), page: page || 1 })
         .then(function (j) { return normalizeList(j.results, 'tv'); }).catch(function () { return []; })
     ]).then(function (r) { return r[0].concat(r[1]); });
   }
 
   /* البحث بالكلمات المفتاحية: نحوّل الوصف لثيمات ثم نستكشف بها */
   function searchKeywords(query) {
-    return req('/search/keyword', { query: query, page: 1, language: undefined })
+    return req('/search/keyword', { query: query, page: 1, language: undefined },
+               { persist: true })
       .then(function (json) { return json.results || []; })
+      .catch(function () { return []; });
+  }
+
+  function searchPeople(query) {
+    return req('/search/person', { query: query, page: 1, include_adult: allowAdult() })
+      .then(function (json) {
+        return (json.results || []).map(function (p) {
+          return { id: p.id, name: p.name, photo: img(p.profile_path, CFG.profile),
+                   job: p.known_for_department || '' };
+        });
+      })
       .catch(function () { return []; });
   }
 
@@ -167,7 +191,7 @@
     return discover(type, { with_keywords: keywordIds.join('|') }, page);
   }
 
-  /* استكشاف عام — يستخدمه صف «مختارة لك» وفلتر التصنيف */
+  /* استكشاف عام — يستخدمه الاستكشاف والتصنيفات والتوصيات */
   function discover(type, extra, page) {
     var params = {
       sort_by: 'popularity.desc',
@@ -188,13 +212,15 @@
     return req('/discover/' + type, params)
       .then(function (json) {
         var list = normalizeList(json.results, type);
-        /* عدد الصفحات المتاح — الخلاصة تحتاجه عشان تقفز لصفحة
-           عشوائية داخل المدى بدل ما تبدأ من الأولى كل مرة */
         list.totalPages = Math.min(json.total_pages || 1, 500);
         list.totalResults = json.total_results || 0;
         return list;
       })
-      .catch(function () { var e = []; e.totalPages = 1; e.totalResults = 0; return e; });
+      .catch(function (err) {
+        var e = [];
+        e.totalPages = 1; e.totalResults = 0; e.failed = (err && err.message) || 'ERR';
+        return e;
+      });
   }
 
   /* ---------- التفاصيل ---------- */
@@ -204,7 +230,7 @@
       ? 'credits,external_ids,similar,recommendations,keywords,translations,release_dates,watch/providers'
       : 'aggregate_credits,external_ids,similar,recommendations,keywords,translations,content_ratings,watch/providers';
 
-    return req('/' + type + '/' + id, { append_to_response: appends })
+    return req('/' + type + '/' + id, { append_to_response: appends }, { persist: true })
       .then(function (raw) {
         var base = normalize(raw, type);
         if (!base) throw new Error('NOT_FOUND');
@@ -212,11 +238,12 @@
         base.tagline    = raw.tagline || '';
         base.runtime    = raw.runtime || (raw.episode_run_time || [])[0] || 0;
         base.status     = raw.status || '';
-        base.homepage   = raw.homepage || '';
+        base.homepage   = CS.util.safeUrl(raw.homepage || '');
         base.budget     = raw.budget || 0;
         base.revenue    = raw.revenue || 0;
         base.genres     = (raw.genres || []).map(function (g) { return g.name; });
         base.countries  = (raw.production_countries || []).map(function (c) { return c.name; });
+        base.countryCodes = (raw.production_countries || []).map(function (c) { return c.iso_3166_1; });
         base.companies  = (raw.production_companies || []).map(function (c) { return c.name; });
         base.languageOf = raw.original_language || '';
         base.imdbId     = raw.imdb_id || (raw.external_ids || {}).imdb_id || '';
@@ -227,16 +254,40 @@
         base.creators   = (raw.created_by || []).map(function (c) { return c.name; });
         base.networks   = (raw.networks || []).map(function (n) { return n.name; });
 
+        /* الحلقة القادمة — أساس تنبيه «نزل جديد» */
+        var nx = raw.next_episode_to_air;
+        base.nextEpisode = nx ? {
+          season: nx.season_number, number: nx.episode_number,
+          name: nx.name || '', airdate: nx.air_date || ''
+        } : null;
+
+        /* قائمة المواسم — للتنقّل بين المواسم والحلقات */
+        base.seasonList = (raw.seasons || [])
+          .filter(function (s) { return s && s.season_number != null; })
+          .map(function (s) {
+            return {
+              number: s.season_number, name: s.name || ('الموسم ' + s.season_number),
+              count: s.episode_count || 0, airdate: s.air_date || '',
+              poster: img(s.poster_path, CFG.poster.sm), overview: s.overview || ''
+            };
+          });
+
         /* الطاقم */
         var credits = raw.credits || raw.aggregate_credits || {};
-        base.cast = (credits.cast || []).slice(0, 16).map(function (c) {
+        base.cast = (credits.cast || []).slice(0, 18).map(function (c) {
           var role = c.character || ((c.roles || [])[0] || {}).character || '';
           return { id: c.id, name: c.name, role: role, photo: img(c.profile_path, CFG.profile) };
         });
-        base.directors = (credits.crew || [])
-          .filter(function (c) { return c.job === 'Director' || c.job === 'Series Director'; })
-          .map(function (c) { return c.name; }).slice(0, 3);
-        base.writers = (credits.crew || [])
+        base.castIds = base.cast.map(function (c) { return c.id; });
+
+        var crew = credits.crew || [];
+        var dirRows = crew.filter(function (c) {
+          return c.job === 'Director' || c.job === 'Series Director' ||
+                 (c.jobs || []).some(function (j) { return j.job === 'Director'; });
+        });
+        base.directors = dirRows.map(function (c) { return c.name; }).slice(0, 3);
+        base.directorIds = dirRows.map(function (c) { return c.id; }).slice(0, 3);
+        base.writers = crew
           .filter(function (c) { return c.department === 'Writing'; })
           .map(function (c) { return c.name; }).slice(0, 3);
 
@@ -244,11 +295,12 @@
         var wp = (raw['watch/providers'] || {}).results || {};
         var region = wp[CS.state.region] || {};
         base.providers = {
-          link: region.link || '',
+          link: CS.util.safeUrl(region.link || ''),
           flatrate: (region.flatrate || []).map(provider),
           rent: (region.rent || []).map(provider),
           buy: (region.buy || []).map(provider)
         };
+        base.providersLink = base.providers.link;
 
         /* الترجمات الرسمية: نفضّل ملخّص TMDB العربي على أي ترجمة آلية */
         var trs = ((raw.translations || {}).translations) || [];
@@ -297,37 +349,60 @@
       });
   }
 
+  /* حلقات موسم واحد */
+  function season(type, id, number) {
+    if (type !== 'tv') return Promise.resolve({ episodes: [] });
+    return req('/tv/' + id + '/season/' + number, {}, { persist: true })
+      .then(function (raw) {
+        return {
+          number: raw.season_number,
+          name: raw.name || ('الموسم ' + raw.season_number),
+          overview: raw.overview || '',
+          episodes: (raw.episodes || []).map(function (e) {
+            return {
+              id: e.id, number: e.episode_number, season: e.season_number,
+              name: e.name || ('الحلقة ' + e.episode_number),
+              overview: e.overview || '',
+              airdate: e.air_date || '',
+              runtime: e.runtime || 0,
+              rating: e.vote_average ? Math.round(e.vote_average * 10) / 10 : 0,
+              still: img(e.still_path, CFG.still)
+            };
+          })
+        };
+      })
+      .catch(function () { return { number: number, name: 'الموسم ' + number, episodes: [] }; });
+  }
+
   function provider(p) {
     return { name: p.provider_name, logo: img(p.logo_path, CFG.logo) };
   }
 
-  /* ---------- صفحات الاستكشاف ---------- */
+  /* ---------- صفحات جاهزة ---------- */
 
-  function trending(window_) {
-    return req('/trending/all/' + (window_ || 'week'))
+  function trending(window_, page) {
+    return req('/trending/all/' + (window_ || 'week'), { page: page || 1 })
       .then(function (json) { return normalizeList(json.results); })
       .catch(function () { return []; });
   }
 
-  function topRated(type) {
-    return req('/' + type + '/top_rated', { page: 1 })
+  function topRated(type, page) {
+    return req('/' + type + '/top_rated', { page: page || 1 })
       .then(function (json) { return normalizeList(json.results, type); })
       .catch(function () { return []; });
   }
 
-  function nowPlaying() {
-    return req('/movie/now_playing', { page: 1, region: CS.state.region })
+  function nowPlaying(page) {
+    return req('/movie/now_playing', { page: page || 1, region: CS.state.region })
       .then(function (json) { return normalizeList(json.results, 'movie'); })
       .catch(function () { return []; });
   }
 
-  function airingToday() {
-    return req('/tv/on_the_air', { page: 1 })
+  function airingToday(page) {
+    return req('/tv/on_the_air', { page: page || 1 })
       .then(function (json) { return normalizeList(json.results, 'tv'); })
       .catch(function () { return []; });
   }
-
-  /* ---------- اختبار المفتاح ---------- */
 
   /* المشابهات/الترشيحات مع رقم الصفحة — عشان «اعرض المزيد» يشتغل */
   function relatedPage(type, id, kind, page) {
@@ -345,21 +420,39 @@
   /* ---------- الأشخاص ---------- */
 
   function person(id) {
-    return req('/person/' + id, { append_to_response: 'combined_credits,external_ids' })
+    return req('/person/' + id, { append_to_response: 'combined_credits,external_ids' },
+               { persist: true })
       .then(function (raw) {
-        var credits = ((raw.combined_credits || {}).cast || [])
-          .map(function (c) { return normalize(c, c.media_type); })
-          .filter(Boolean)
-          .filter(function (c) { return c.poster; })
-          .sort(function (a, b) { return (b.popularity || 0) - (a.popularity || 0); });
+        var cc = raw.combined_credits || {};
 
-        var seen = {};
-        credits = credits.filter(function (c) {
+        function take(list, asCrew) {
+          return (list || [])
+            .map(function (c) {
+              var it = normalize(c, c.media_type);
+              if (!it) return null;
+              it.personRole = asCrew ? (c.job || '') : (c.character || '');
+              it.asCrew = !!asCrew;
+              return it;
+            })
+            .filter(Boolean)
+            .filter(function (c) { return c.poster; });
+        }
+
+        /* المخرج يُعرف بأعماله كطاقم لا كممثل — الصفحة كانت تعرض
+           التمثيل وحده فتطلع صفحة المخرج فاضية */
+        var acting = take(cc.cast, false);
+        var directing = take((cc.crew || []).filter(function (c) {
+          return c.job === 'Director' || c.job === 'Series Director';
+        }), true);
+
+        var seen = {}, works = [];
+        directing.concat(acting).forEach(function (c) {
           var k = c.type + ':' + c.id;
-          if (seen[k]) return false;
+          if (seen[k]) return;
           seen[k] = true;
-          return true;
+          works.push(c);
         });
+        works.sort(function (a, b) { return (b.popularity || 0) - (a.popularity || 0); });
 
         return {
           id: raw.id,
@@ -367,10 +460,12 @@
           photo: img(raw.profile_path, CFG.profile),
           job: raw.known_for_department || '',
           birthday: raw.birthday || '',
+          deathday: raw.deathday || '',
           place: raw.place_of_birth || '',
           bio: raw.biography || '',
           imdbId: (raw.external_ids || {}).imdb_id || '',
-          works: credits
+          directedCount: directing.length,
+          works: works
         };
       });
   }
@@ -378,14 +473,13 @@
   function testKey(key) {
     var prev = CS.state.apiKey;
     CS.state.apiKey = key;
-    return req('/configuration', {}, { fresh: true })
+    return req('/configuration', {}, { fresh: true, persist: false })
       .then(function () { return true; })
       .catch(function (err) { CS.state.apiKey = prev; throw err; });
   }
 
   /**
-   * فحص كامل للاتصال — يرجّع تقرير مفصّل بدل رمي خطأ.
-   * { ok, key, steps:[{name, ok, detail}] }
+   * فحص كامل للاتصال — يرجّع تقريرًا مفصّلًا بدل رمي خطأ.
    */
   function diagnose(key) {
     var prev = CS.state.apiKey;
@@ -393,7 +487,7 @@
 
     var steps = [];
     function run(name, path, params) {
-      return req(path, params || {}, { fresh: true })
+      return req(path, params || {}, { fresh: true, persist: false })
         .then(function (json) {
           steps.push({ name: name, ok: true, detail: describe(path, json) });
           return true;
@@ -404,14 +498,14 @@
         });
     }
 
-    return run('الاتصال والمفتاح', '/configuration')
+    return run(CS.usingProxy() ? 'الوسيط والاتصال' : 'الاتصال والمفتاح', '/configuration')
       .then(function (ok) {
         if (!ok) return false;
         return run('البحث', '/search/movie', { query: 'inception', page: 1 });
       })
       .then(function (ok) {
         if (!ok) return false;
-        return run('الرائج', '/trending/all/week');
+        return run('الاستكشاف', '/discover/movie', { page: 1 });
       })
       .then(function () {
         if (key) CS.state.apiKey = prev;
@@ -421,7 +515,7 @@
   }
 
   function describe(path, json) {
-    if (path === '/configuration') return 'المفتاح مقبول من TMDB';
+    if (path === '/configuration') return CS.usingProxy() ? 'الوسيط يرد والمفتاح عنده' : 'المفتاح مقبول من TMDB';
     var n = (json.results || []).length;
     return n ? 'رجعت ' + n + ' نتيجة' : 'اتصل بنجاح لكن بلا نتائج';
   }
@@ -429,8 +523,10 @@
   function explain(err) {
     var m = err && err.message || '';
     if (m === 'BAD_KEY')     return 'TMDB رفض المفتاح (401) — المفتاح غلط أو ملغى';
-    if (m === 'RATE_LIMIT')  return 'تجاوزت حد الطلبات (429) — انتظر شوي';
-    if (m === 'NO_KEY')      return 'ما فيه مفتاح مضبوط';
+    if (m === 'RATE_LIMIT')  return 'تجاوزت حد الطلبات (429) — الموقع يتراجع تلقائيًا ويعيد المحاولة';
+    if (m === 'NO_KEY')      return 'ما فيه مفتاح مضبوط ولا وسيط';
+    if (m === 'TIMEOUT')     return 'الطلب تجاوز المهلة — الشبكة بطيئة أو محجوبة';
+    if (m === 'ALL_SOURCES_FAILED') return 'كل المصادر البديلة سقطت';
     if (/^HTTP_/.test(m))    return 'TMDB رد بخطأ ' + m.replace('HTTP_', '');
     if (/Failed to fetch|NetworkError|Load failed/i.test(m))
       return 'ما وصلت لـ TMDB إطلاقًا — إنترنت مقطوع، أو الشبكة/المزوّد حاجب api.themoviedb.org';
@@ -440,6 +536,7 @@
   CS.tmdb = {
     req: req,
     img: img,
+    imgAlt: imgAlt,
     normalize: normalize,
     normalizeList: normalizeList,
     loadGenres: loadGenres,
@@ -448,9 +545,11 @@
     searchByTitle: searchByTitle,
     searchTitleBoth: searchTitleBoth,
     searchKeywords: searchKeywords,
+    searchPeople: searchPeople,
     discoverByKeywords: discoverByKeywords,
     discover: discover,
     details: details,
+    season: season,
     trending: trending,
     topRated: topRated,
     nowPlaying: nowPlaying,

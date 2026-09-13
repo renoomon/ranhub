@@ -1,0 +1,28 @@
+{
+  "name": "RANHUB — أفلام ومسلسلات وبرامج",
+  "short_name": "RANHUB",
+  "description": "ابحث بوصف القصة أو بالاسم، وشوف البوستر والقصة الكاملة بالعربي مع التصنيف العمري الحقيقي.",
+  "lang": "ar",
+  "dir": "rtl",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#08090d",
+  "theme_color": "#08090d",
+  "categories": ["entertainment"],
+  "icons": [
+    {
+      "src": "assets/icons/icon-192.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "assets/icons/icon-512.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -7,7 +7,6 @@
   'use strict';
 
   var LIM = CS.config.limits;
-  var cache = {};
 
   /* يميّز صفحات الأفلام والمسلسلات من وصف ويكي داتا */
   var RE_MOVIE  = /\b(film|movie|motion picture)\b|فيلم/i;
@@ -25,14 +24,20 @@
       .join('&');
 
     var url = 'https://' + lang + '.wikipedia.org/w/api.php?' + qs;
-    if (cache[url]) return Promise.resolve(cache[url]);
+    /* المصدر مطفأ أو مكتوم؟ نرجّع فاضيًا بهدوء بدل ما نطلب ونفشل */
+    if (CS.contentSources && !CS.contentSources.live('wikipedia')) {
+      return Promise.reject(new Error('SOURCE_OFF'));
+    }
 
-    return fetch(url)
-      .then(function (r) {
-        if (!r.ok) throw new Error('WIKI_HTTP_' + r.status);
-        return r.json();
+    return CS.net.json(url, { persist: true, ttl: 7 * 24 * 3600 * 1000, retries: 1 })
+      .then(function (json) {
+        if (CS.contentSources) CS.contentSources.note('wikipedia', true, '');
+        return json;
       })
-      .then(function (json) { cache[url] = json; return json; });
+      .catch(function (err) {
+        if (CS.contentSources) CS.contentSources.note('wikipedia', false, (err && err.message) || 'ما رد');
+        throw err;
+      });
   }
 
   /* ---------- 1) البحث في النص الكامل ---------- */
@@ -203,6 +208,12 @@
     var key = from + '>' + to + ':' + hash(text);
     if (memTr[key]) return Promise.resolve(memTr[key]);
 
+    /* الذاكرة على القرص تنفع كمان: نفس الجملة تُترجم مرة واحدة للأبد */
+    var disk = diskCache();
+    if (disk[key]) { memTr[key] = disk[key]; return Promise.resolve(disk[key]); }
+
+    if (CS.contentSources && !CS.contentSources.live('mymemory')) return Promise.resolve('');
+
     var url = 'https://api.mymemory.translated.net/get?q=' +
       encodeURIComponent(text) + '&langpair=' + from + '|' + to;
 
@@ -210,16 +221,23 @@
     var email = CS.store.get(CS.KEYS.email, '');
     if (email) url += '&de=' + encodeURIComponent(email);
 
-    return fetch(url)
-      .then(function (r) { return r.ok ? r.json() : null; })
+    return CS.net.json(url, { persist: true, ttl: 30 * 24 * 3600 * 1000, retries: 1 })
       .then(function (json) {
         var out = ((json || {}).responseData || {}).translatedText || '';
         /* الخدمة ترجّع رسائل الحصة كنص عادي — نتجاهلها */
-        if (!out || /MYMEMORY WARNING|QUERY LENGTH LIMIT|INVALID|DAILY LIMIT/i.test(out)) return '';
+        if (!out || /MYMEMORY WARNING|QUERY LENGTH LIMIT|INVALID|DAILY LIMIT/i.test(out)) {
+          if (CS.contentSources) CS.contentSources.note('mymemory', false, 'انتهت الحصة اليومية');
+          return '';
+        }
+        if (CS.contentSources) CS.contentSources.note('mymemory', true, '');
         memTr[key] = out;
+        cachePut(key, out);
         return out;
       })
-      .catch(function () { return ''; });
+      .catch(function (e) {
+        if (CS.contentSources) CS.contentSources.note('mymemory', false, (e && e.message) || 'ما رد');
+        return '';
+      });
   }
 
   /* تقسيم النص لجُمل بدون lookbehind (توافق أوسع للمتصفحات) */

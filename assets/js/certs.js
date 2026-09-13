@@ -451,7 +451,10 @@
   /* الإباحي وحده — الجنس الصريح داخل عمل سينمائي له وسمه الخاص تحت،
      وكان مخلوطًا هنا فيُصنَّف porn ويُحال إلى قسم الإباحي. */
   var PORN_NAME = /^(pornography|porn|hardcore pornography|adult video|hentai)$/;
-  var EXPLICIT_NAME = /^(unsimulated sex|explicit sex|sex scene|roman porno|pinku eiga)$/;
+  /* «صريح» = جنس غير تمثيلي داخل عمل سينمائي. القائمة وُسّعت لتطابق
+     مفردات قسم Explicit في feed.js حرفًا بحرف: كل كلمة يطلبها القسم
+     من TMDB لازم تُصنَّف صريحة هنا، وإلا رجعت أعمال ترميها البوابة. */
+  var EXPLICIT_NAME = /^(unsimulated sex|explicit sex|graphic sex|sex scene|sex act|sexual intercourse|unsimulated oral sex|hardcore sex|simulated sex|sexual explicitness|explicit nudity|roman porno|nikkatsu roman porno|pinku eiga)$/;
   var NUDE_NAME = /^(nudity|female nudity|male nudity|topless|nude|full frontal nudity|frontal nudity)$/;
   var TEASE_NAME = /^(erotic|erotica|eroticism|erotic movie|erotic film|erotic cinema|erotic thriller|erotic drama|erotic romance|erotic comedy|softcore|soft core|sexploitation|nunsploitation|nudie|sensual|sensuality|steamy|sex|sexual|sexuality|sex scene|sex comedy|women in prison|bdsm|fetish|prostitution|striptease|seduction|porn star|porn actress|adult filmmaking|adult film|adult movie)$/;
 
@@ -514,27 +517,34 @@
 
   /* قوي = ٤ نقاط. مثبَّت الطرفين ^…$ عمدًا: «homoerotic» ما هو
      «erotic»، و«autoerotic asphyxiation» ما هو سينما جنسية. */
-  var STRONG_NAME = /^(erotic|erotica|eroticism|erotic movie|erotic film|erotic cinema|erotic thriller|erotic drama|erotic romance|erotic comedy|erotic anime|softcore|soft core|softcore porn|sexploitation|nunsploitation|pinku eiga|pornography|porn|hardcore pornography|adult film|adult video|adult movie|adult animation|hentai|ecchi|unsimulated sex|explicit sex|full frontal nudity|frontal nudity)$/;
+  var STRONG_NAME = /^(erotic|erotica|eroticism|erotic movie|erotic film|erotic cinema|erotic thriller|erotic drama|erotic romance|erotic comedy|erotic anime|softcore|soft core|softcore porn|sexploitation|nunsploitation|pinku eiga|roman porno|nikkatsu roman porno|pornography|porn|hardcore pornography|adult film|adult video|adult movie|adult animation|hentai|ecchi|unsimulated sex|unsimulated oral sex|explicit sex|graphic sex|hardcore sex|sexual explicitness|explicit nudity|full frontal nudity|frontal nudity)$/;
 
   /* القلب = ٢ نقطة، وهو شرط لازم لأي قبول بالتراكم */
   var CORE_NAME = [
-    [/^(nudity|female nudity|male nudity|topless|nude|nudism)$/, 'nudity'],
-    [/^(sex|sexual|sexuality|sexual content)$/,                  'sex']
+    [/^(nudity|female nudity|male nudity|topless|nude|nudism|nudist)$/, 'nudity'],
+    [/^(sex|sexual|sexuality|sexual content)$/,                        'sex']
   ];
 
   /* متوسط = ٢ نقطة. هذي أوصاف نوع لا أوصاف محتوى: «sex comedy»
      تقع على كوميديا مراهقين عادية، و«women in prison» على دراما
      سجون. تتراكم ولا تقبل وحدها. */
-  var MEDIUM_NAME = /^(sex scene|love scene|hardcore|porn star|porn actress|adult filmmaking|sex comedy|women in prison|nudie|sensual|sensuality|sensual cinema|steamy|striptease|burlesque|sexual awakening|sexual obsession|sexual desire|sexual tension|sexual repression)$/;
+  var MEDIUM_NAME = /^(sex scene|sex act|sexual intercourse|simulated sex|love scene|hardcore|porn star|porn actress|adult filmmaking|sex comedy|women in prison|nudie|sensual|sensuality|sensual cinema|steamy|striptease|burlesque|sexual awakening|sexual obsession|sexual desire|sexual tension|sexual repression)$/;
 
   /* ضعيف = نقطة. كل مجموعة مفهوم واحد يُعدّ مرة. */
+  /* ضعيف = نقطة. كل مجموعة مفهوم واحد يُعدّ مرة.
+     القائمة وُسّعت لتغطّي أسماء أزرار التصنيفات في الموقع: كان
+     خمسة عشر اسمًا منها (Roman Porno · Nudist · Swinging · Group Sex ·
+     Dominatrix · Wife Swapping · Open Marriage · Peeping Tom ·
+     Stepmother · Mistress · Sexual Fantasy …) صفرًا عند البوابة —
+     يعني الزرّ يطلب من TMDB ويرمي كل ما رجع، ويطلع القسم فاضيًا
+     بعد ثمانية عشر طلبًا. */
   var WEAK_NAME = [
-    [/^(prostitution|prostitute|brothel|strip club|stripper|escort|sex worker)$/, 'prostitution'],
-    [/^(bdsm|sadomasochism|sadomasochist|fetish|voyeurism|orgy|threesome|swinger|bondage)$/, 'kink'],
-    [/^(infidelity|adultery|affair|extramarital affair)$/,                        'affair'],
-    [/^(seduction|seductress|temptation|lust|desire)$/,                           'seduction'],
-    [/^(intimate|intimacy|love making|making love|taboo)$/,                       'intimacy'],
-    [/^(lingerie|bathhouse|sauna|arthouse)$/,                                     'undress']
+    [/^(prostitution|prostitute|brothel|strip club|stripper|escort|sex worker|call girl|courtesan|geisha)$/, 'prostitution'],
+    [/^(bdsm|sadomasochism|sadomasochist|masochism|sadism|fetish|voyeurism|voyeur|peeping tom|orgy|group sex|threesome|foursome|swinger|swinging|wife swapping|open marriage|polyamory|bondage|dominatrix|submission|exhibitionism)$/, 'kink'],
+    [/^(infidelity|adultery|affair|extramarital affair|cheating wife|cheating husband)$/, 'affair'],
+    [/^(seduction|seductress|temptation|lust|desire|sexual fantasy|sexual attraction|femme fatale)$/, 'seduction'],
+    [/^(intimate|intimacy|love making|making love|taboo|forbidden love|stepmother|stepfather|stepdaughter|stepson|mistress|harem)$/, 'intimacy'],
+    [/^(lingerie|bathhouse|sauna|skinny dipping|massage parlor|arthouse)$/, 'undress']
   ];
 
   /* أنواع TMDB اللي تنقض القبول مهما كانت الوسوم */
@@ -737,8 +747,17 @@
     return heatPending[k];
   }
 
+  /* هل هذا الاسم وسم لا يقع إلا على سينما جنسية؟
+     الخلاصة تستعمله لتفضيل الكلمات اللي تثبت نفسها: العمل الراجع
+     من /discover بكلمة قوية يعدّي البوابة بلا أي طلب إضافي، والراجع
+     بكلمة ضعيفة يكلّف نداء /keywords لكل بطاقة. */
+  function isStrongName(name) {
+    return STRONG_NAME.test(String(name || '').trim().toLowerCase());
+  }
+
   CS.certs = {
     TIERS: TIERS,
+    isStrongName: isStrongName,
     heatOf: heatOf,
     KIND: KIND,
     contentKind: contentKind,
