@@ -50,7 +50,7 @@
     /* عام — سينما جنسية. «porn star» و«porn actress» و«adult filmmaking»
        تصف أعمالًا *عن* صناعة الإباحية (Boogie Nights وأمثاله) لا أعمالًا
        إباحية، فمكانها هنا لا في القسم الإباحي. */
-    general:  { seed: [190370, 155477, 10053, 267122, 339680, 281741, 7344, 158436, 195997],
+    general:  { seed: [],
                 words: GENERAL_WORDS },
     /* إباحي — جنس حقيقي غير تمثيلي. البذرة الوحيدة المؤكَّدة هي
        «pornography»، والباقي يأتي من علم adult عند TMDB — وهذا
@@ -62,6 +62,62 @@
 
   var DEFAULT_SECTION = 'general';
 
+  /* ------------------------------------------------------------
+     كل تصنيفات erotic على TMDB — أرقام مُتحقَّق منها من استجابات
+     حقيقية (اسم الكلمة + عدد الأعمال)، فما فيه رقم مخمَّن ولا كلمة
+     وهمية. تُعرض كأزرار تصنيف في الرئيسية، وتُغذّي بذور القسم العام.
+     ------------------------------------------------------------ */
+  var CATEGORIES = [
+    { id: 155477, name: 'Softcore' },
+    { id: 33998,  name: 'Lesbian' },
+    { id: 155262, name: 'Threesome' },
+    { id: 190370, name: 'Erotic' },
+    { id: 2426,   name: 'Group Sex' },
+    { id: 2699,   name: 'Fetish' },
+    { id: 158713, name: 'BDSM' },
+    { id: 33841,  name: 'Taboo' },
+    { id: 1817,   name: 'Orgy' },
+    { id: 596,    name: 'Adultery' },
+    { id: 13059,  name: 'Prostitution' },
+    { id: 3182,   name: 'Seduction' },
+    { id: 910,    name: 'Bondage' },
+    { id: 178649, name: 'Voyeurism' },
+    { id: 170827, name: 'Sex Comedy' },
+    { id: 4076,   name: 'Massage' },
+    { id: 10053,  name: 'Sexploitation' },
+    { id: 5921,   name: 'Stepmother' },
+    { id: 9835,   name: 'Sexual Fantasy' },
+    { id: 10968,  name: 'Lingerie' },
+    { id: 207767, name: 'Erotic Thriller' },
+    { id: 281741, name: 'Nudity' },
+    { id: 190178, name: 'Sex Worker' },
+    { id: 359980, name: 'Female Nudity' },
+    { id: 162804, name: 'Sexual Awakening' },
+    { id: 11869,  name: 'Mistress' },
+    { id: 213417, name: 'Nudist' },
+    { id: 6373,   name: 'Sadomasochism' },
+    { id: 7089,   name: 'Dominatrix' },
+    { id: 41404,  name: 'Sexual Desire' },
+    { id: 4378,   name: 'Striptease' },
+    { id: 348517, name: 'Roman Porno' },
+    { id: 329968, name: 'Bisexual' },
+    { id: 156391, name: 'Peeping Tom' },
+    { id: 195222, name: 'Nunsploitation' },
+    { id: 41260,  name: 'Sensuality' },
+    { id: 302868, name: 'Erotic Comedy' },
+    { id: 325693, name: 'Erotica' },
+    { id: 244648, name: 'Wife Swapping' },
+    { id: 323690, name: 'Gay' },
+    { id: 282903, name: 'Unsimulated Sex' },
+    { id: 176127, name: 'Open Marriage' },
+    { id: 354470, name: 'Sex Scene' },
+    { id: 14914,  name: 'Swinging' },
+    { id: 298666, name: 'Erotic Romance' },
+    { id: 364719, name: 'Erotic Drama' },
+    { id: 343572, name: 'Erotic Film' },
+    { id: 381597, name: 'Pinku Eiga' }
+  ];
+
   /* أسماء البذور المؤكَّدة — من استجابات TMDB حقيقية */
   var SEED_NAMES = {
     190370: 'erotic movie', 155477: 'softcore', 10053: 'sexploitation',
@@ -71,6 +127,13 @@
   };
 
   function sectionFor(tab) { return SECTIONS[tab] ? tab : DEFAULT_SECTION; }
+
+  function tagNameOf(id) {
+    for (var i = 0; i < CATEGORIES.length; i++) {
+      if (CATEGORIES[i].id === +id) return CATEGORIES[i].name;
+    }
+    return '';
+  }
 
   /* أرقام الكلمات لكل قسم — تُحلّ مرة وحدة وتنحفظ في الذاكرة.
      ونحفظ الاسم مقابل الرقم كمان: الفهرس يحتاجه عشان يعرف أي وسم
@@ -85,6 +148,12 @@
     if (resolved[key]) return Promise.resolve(resolved[key]);
 
     var conf = SECTIONS[key];
+    /* القسم العام صار يعتمد كل تصنيفات erotic: البذرة = كل الأرقام */
+    if (key === 'general' && !conf.seed.length) {
+      resolved[key] = CATEGORIES.map(function (c) { return c.id; });
+      CATEGORIES.forEach(function (c) { names[c.id] = c.name; });
+      return Promise.resolve(resolved[key]);
+    }
     /* البذور المؤكَّدة أسماؤها معروفة مسبقًا */
     SEED_NAMES && Object.keys(SEED_NAMES).forEach(function (id) { names[id] = SEED_NAMES[id]; });
     if (!conf.words.length) { resolved[key] = conf.seed.slice(); return Promise.resolve(resolved[key]); }
@@ -198,6 +267,8 @@
       tab: DEFAULT_SECTION, sort: 'popularity.desc', origLang: '', minRating: 0,
       mediaType: '',                       /* '' الكل · movie · tv · reality */
       forYouMin: FORYOU_MIN,               /* عتبة التوصيات — ثابتة، ما تنزل */
+      strong: false,                       /* «تحديث قوي» — يطلب أعمالًا أقوى */
+      tag: 0,                              /* تصنيف مختار من أزرار التصنيفات */
       /* بذرة الجلسة: تتغيّر مع كل فتح للقسم فتتغيّر الأعمال المعروضة */
       seed: (Math.random() * 0x7fffffff) | 0,
       pageOffset: Math.floor(Math.random() * 97),
@@ -244,6 +315,14 @@
     if (state.sort === 'vote_average.desc') p['vote_count.gte'] = 120;
     else if (!CS.certs.adultAllowed()) p['vote_count.gte'] = 8;
 
+    /* وضع «تحديث قوي»: يطلب أعمالًا أقوى لا مجرد أعمال جديدة —
+       حد أصوات عالٍ + ترتيب بالشهرة، فالمعروض يتبدّل إلى أعمال
+       معروفة ومقيَّمة، لا بقية الكتالوج. */
+    if (state.strong) {
+      p.sort_by = 'popularity.desc';
+      p['vote_count.gte'] = 80;
+    }
+
     return p;
   }
 
@@ -261,6 +340,40 @@
     delete p['vote_count.gte'];
 
     if (SECTIONS[sectionFor(state.tab)].fromTaste) return fromTaste(page);
+
+    /* تصنيف مختار: التصنيف مقطعًا مع كلمة الموقع القوية (AND بفاصلة).
+       التصنيف وحده يرجّع أعمالًا عامة موسومة به (Fifty Shades مثلًا)
+       فترميها البوابة ويطلع القسم فاضيًا. الفصل بفاصلة عند TMDB = AND،
+       فالناتج أعمال ذلك التصنيف فعلًا وداخل كتالوج الموقع معًا.
+       والمقطع يتغيّر بالبذرة فيتجدّد المعروض. */
+    if (state.tag) {
+      var tagKw = String(state.tag);
+      var tagJobs = [];
+
+      if (state.mediaType !== 'tv' && state.mediaType !== 'reality') {
+        /* ثلاث صفحات بترتيبات مختلفة: الصفحة الأولى من أي تصنيف
+           أعمال عامة مشهورة، والعمق هو اللي يحمل الأعمال الجنسية
+           الحقيقية لهذا التصنيف. */
+        ['popularity.desc', 'vote_count.desc'].forEach(function (sb, i) {
+          tagJobs.push(CS.tmdb.discover('movie', Object.assign({}, p, {
+            with_keywords: tagKw, sort_by: sb
+          }), page + i));
+        });
+      }
+      if (state.mediaType !== 'movie') {
+        var tq2 = Object.assign({}, p, { with_keywords: tagKw, sort_by: 'popularity.desc' });
+        tagJobs.push(CS.tmdb.discover('tv', tq2, page));
+      }
+      var tagName = tagNameOf(state.tag);
+      return Promise.all(tagJobs).then(function (lists) {
+        (lists || []).forEach(function (l) {
+          if (tagName && CS.certs.seedKeyword) {
+            (l || []).forEach(function (it) { CS.certs.seedKeyword(it, tagName); });
+          }
+        });
+        return lists;
+      });
+    }
 
     return keywordIds(state.tab).then(function (all) {
       if (!all || !all.length) return [];
@@ -423,7 +536,10 @@
 
     state.loading = true;
     var token = state.token;
-    var target = state.items.length + PAGE;
+    /* تصنيف مختار: نكتفي بدفعة أصغر فنرسم الشبكة بسرعة — التصنيف
+       الواحد يعطي أعمالًا أقل من نافذة القسم العامة، وكان انتظار
+       ٥٠ عملًا يترك المستخدم على الهياكل طويلًا. */
+    var target = state.items.length + (state.tag ? 24 : PAGE);
     var emptyRounds = 0;
 
     function round() {
@@ -492,7 +608,10 @@
       if (it.adult && !CS.certs.adultAllowed()) return;
       /* وصنف العمل لازم يطابق صنف القسم: سينما في «عام»، إباحي في
          «Explicit». بدونها القسمان يعرضان نفس البركة. */
-      if (CS.certs.kindFits && CS.certs.kindFits(it) === false) return;
+      /* عند تصنيف مختار لا نطبّق صنف القسم: المستخدم طلب هذا
+         التصنيف بعينه وهو جنسي بطبيعته، فحصرُه في صنف القسم كان
+         يُفرغ الشبكة (تصنيفات كثيرة تصنيفها «صريح» لا «إيحاء»). */
+      if (!state.tag && CS.certs.kindFits && CS.certs.kindFits(it) === false) return;
       /* الأعمال اللي صوّت عليها ما تتكرر في الاستكشاف */
       if (taste[k]) return;
       /* بلا بوستر = بطاقة فاضية */
@@ -525,6 +644,19 @@
       });
       return;
     }
+    /* «تحديث قوي»: نرتّب بالقوة لا بالشهرة الخام — عدد الأصوات
+       والتقييم والشهرة معًا، فيصعد المعروف المقيَّم ويهبط المجهول.
+       (حد الأصوات في الطلب لا يفيد: sourcesFor يحذفه لأن أعمال
+       الكبار ما تبلغ أي حد.) */
+    if (state.strong) {
+      state.items.forEach(function (it) {
+        it.strongScore = Math.log10((it.votes || 0) + 1) * 3 + (it.rating || 0) +
+                         Math.log10((it.popularity || 0) + 1);
+      });
+      state.items.sort(function (a, b) { return (b.strongScore || 0) - (a.strongScore || 0); });
+      return;
+    }
+
     if (state.sort !== 'foryou') return;
     var p = CS.taste.profile();
     if (!p.genres.length) return;
@@ -547,6 +679,8 @@
     SECTIONS: SECTIONS,
     DEFAULT_SECTION: DEFAULT_SECTION,
     FORYOU_MIN: FORYOU_MIN,
+    CATEGORIES: CATEGORIES,
+    tagNameOf: tagNameOf,
     reset: reset,
     current: current,
     loadMore: loadMore,

@@ -713,3 +713,25 @@ a.tag:hover{ border-color:rgba(255,122,47,.6); color:var(--hot); }
 .dt__logo{ max-height:clamp(56px,9vw,120px); max-width:min(100%,520px); width:auto; display:block;
   margin-inline-start:auto; filter:drop-shadow(0 4px 18px rgba(0,0,0,.6)); }
 .card__cert--unknown{ border-color:rgba(148,163,184,.4)!important; color:#94a3b8!important; }
+
+/* ============================================================
+   أزرار تصنيفات erotic — صف أفقي تحت التبويبات
+   ============================================================ */
+
+.cats{
+  display:flex; gap:.45rem; overflow-x:auto; padding:.15rem 0 .95rem;
+  scrollbar-width:none; -webkit-overflow-scrolling:touch;
+}
+.cats::-webkit-scrollbar{ display:none; }
+
+.cat{
+  flex-shrink:0; font-size:.8rem; font-weight:700; color:var(--text-2);
+  padding:.36rem .9rem; border-radius:99px; cursor:pointer;
+  border:1px solid var(--line); background:var(--surface);
+  transition:all .16s var(--ease); white-space:nowrap;
+}
+.cat:hover{ color:var(--text); border-color:#39405a; }
+.cat.is-on{
+  background:var(--hot); border-color:var(--hot); color:#140a06;
+  box-shadow:0 6px 18px -8px rgba(255,122,47,.85);
+}

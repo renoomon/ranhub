@@ -286,13 +286,42 @@
       sort: $('#feed-sort').value,
       origLang: $('#feed-lang').value,
       minRating: +$('#feed-rating').value || 0,
-      mediaType: ($('#feed-type') || {}).value || ''
+      mediaType: ($('#feed-type') || {}).value || '',
+      tag: +($('#feed-cats') && $('#feed-cats').dataset.cat) || 0
     });
 
     $('#feed-grid').innerHTML = CS.ui.skeletons(18);
     $('#feed-empty').hidden = true;
     $('#feed-more').hidden = true;
     loadFeed(true);
+  }
+
+  /* ------------------------------------------------------------
+     أزرار تصنيفات erotic: تُبنى من قائمة التصنيفات المتحقَّق منها،
+     وكل زرّ يفلتر الشبكة على ذلك التصنيف وحده. «الكل» يرجع لنافذة
+     القسم العامة. الاختيار يُحفظ في الجلسة ويُطبَّق عند إعادة التحميل.
+     ------------------------------------------------------------ */
+  function paintCats() {
+    var box = $('#feed-cats');
+    if (!box || !CS.feed || !CS.feed.CATEGORIES) return;
+
+    var active = +($('#feed-cats').dataset.cat || 0);
+
+    /* data-cat لا data-tag: «data-tag» محجوز لمسار صفحة الوسوم
+       في الموقع، واستعماله هنا كان ينقل الزائر لصفحة أخرى. */
+    var html = '<button class="cat' + (active ? '' : ' is-on') + '" data-cat="0" type="button">الكل</button>';
+    CS.feed.CATEGORIES.forEach(function (c) {
+      html += '<button class="cat' + (active === c.id ? ' is-on' : '') + '" data-cat="' + c.id + '" ' +
+        'type="button">' + esc0(c.name) + '</button>';
+    });
+    box.innerHTML = html;
+  }
+
+  function setCat(tag) {
+    var box = $('#feed-cats');
+    if (box) box.dataset.cat = String(tag || 0);
+    paintCats();
+    startFeed(currentTab());
   }
 
   function setTab(tab) {
@@ -350,14 +379,20 @@
   }
 
   function paintFeed(items, res, first, btn) {
+    var strongBtn = $('#btn-index-strong');
+    if (strongBtn) strongBtn.disabled = false;
     /* بوابة واحدة للموقع كله: العمل ما يُعرض إلا إذا TMDB وسمه
        بمحتوى جنسي. اللي ما وصلت وسومه يُمنع لا يُعرض على الشك. */
+    var tagOn = !!CS.feed.current().tag;   /* تصنيف مختار: لا نحصر الصنف */
     var shown = items.filter(function (it) {
-      return CS.certs.isAdultWork(it) === true && CS.certs.kindFits(it) !== false;
+      return CS.certs.isAdultWork(it) === true && (tagOn || CS.certs.kindFits(it) !== false);
     });
 
     /* الفلترة تاكل من الحصيلة — نكمّل تحميلًا تلقائيًا بدل ما نطلع صفحة شبه فاضية */
-    if (shown.length < 24 && !res.exhausted && autoRounds < 3) {
+    /* تصنيف مختار يحتاج جولات أكثر: الصفحات الأولى من أي تصنيف
+       أعمال عامة، والعمل الجنسي الحقيقي يظهر في العمق. */
+    var maxRounds = tagOn ? 4 : 3;
+    if (shown.length < 24 && !res.exhausted && autoRounds < maxRounds) {
       autoRounds++;
       if (shown.length) {
         $('#feed-empty').hidden = true;
@@ -470,27 +505,33 @@
      صفحات مختلفة) فيجيب مادة أحدث وأكثر للفهرس وبوسترات أكثر.
      ------------------------------------------------------------ */
   function runDeepSweep() {
-    if (!CS.catalog || !CS.catalog.deepSweep) return;
     var btn = $('#btn-index-strong');
-    if (btn) btn.disabled = true;
-    paintIndexBtn('busy');
-    CS.ui.toast('🚀 تحديث قوي — يمسح الفهرس بعمق…');
+    var tab = currentTab();
 
-    var floor = new Promise(function (r) { setTimeout(r, 450); });
-    CS.catalog.deepSweep().then(function (added) {
-      return floor.then(function () { return added; });
-    }).then(function (added) {
-      paintIndexBtn();
-      renderCatalogState();
-      if (btn) btn.disabled = false;
-      CS.ui.toast(added > 0
-        ? '🚀 تحديث قوي: انضاف ' + added + ' عمل للفهرس'
-        : '🟡 الفهرس محدَّث — ما فيه جديد');
-    }).catch(function () {
-      paintIndexBtn();
-      if (btn) btn.disabled = false;
-      CS.ui.toast('🔴 ما قدرت أكمل التحديث القوي');
+    /* ١) نبدّل المعروض فورًا: بذرة جديدة + وضع «أعمال أقوى»
+          (حد أصوات أعلى وترتيب بالشهرة) — هذا اللي يشوفه المستخدم. */
+    CS.store.set(CS.KEYS.certTier, certFor(tab));
+    autoRounds = 0;
+    CS.feed.reset({
+      tab: tab,
+      sort: $('#feed-sort').value,
+      origLang: $('#feed-lang').value,
+      minRating: +$('#feed-rating').value || 0,
+      mediaType: ($('#feed-type') || {}).value || '',
+      strong: true
     });
+    $('#feed-title').textContent = titleFor(tab);
+    $('#feed-grid').innerHTML = CS.ui.skeletons(18);
+    $('#feed-empty').hidden = true;
+    $('#feed-more').hidden = true;
+    if (btn) btn.disabled = true;
+    CS.ui.toast('🔄 تحديث قوي — يجيب أعمالًا أقوى…');
+    loadFeed(true);
+
+    /* ٢) وفي الخلفية نوسّع الفهرس بعمق حتى يصير البحث أقوى كمان */
+    if (CS.catalog && CS.catalog.deepSweep) {
+      CS.catalog.deepSweep().then(function () { paintIndexBtn(); }).catch(function () {});
+    }
   }
 
   function emptyFeedHtml() {
@@ -2145,6 +2186,16 @@
 
     var strongBtn = $('#btn-index-strong');
     if (strongBtn) strongBtn.addEventListener('click', runDeepSweep);
+
+    var cats = $('#feed-cats');
+    if (cats) {
+      paintCats();
+      cats.addEventListener('click', function (e) {
+        var b = e.target.closest('.cat');
+        if (!b) return;
+        setCat(+b.dataset.cat || 0);
+      });
+    }
 
     var sweepBtn = $('#btn-catalog-sweep');
     if (sweepBtn && CS.catalog) sweepBtn.addEventListener('click', function () {
