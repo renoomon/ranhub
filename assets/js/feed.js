@@ -349,13 +349,34 @@
     /* الصفحة تُزاح بالبذرة كمان: بعملين اثنين محبوبين، الصفحة هي
        المحور الوحيد الباقي للتغيير بين الزيارات */
     var pg = ((page - 1 + (state.seed % 3)) % 5) + 1;
+    var ADULT = SECTIONS.general.seed;
 
     return CS.util.pool(seeds, 4, function (it) {
-      return Promise.all([
+      var jobs = [
         CS.tmdb.relatedPage(it.type, it.id, 'recommendations', pg),
         CS.tmdb.relatedPage(it.type, it.id, 'similar', pg)
-      ]).then(function (r) {
-        return (r[0].items || []).concat(r[1].items || []);
+      ];
+
+      /* ترشيحات TMDB لأعمال الكبار ترجع أعمالًا عادية، وبوابة المحتوى
+         ترميها كلها فيطلع القسم ببطاقتين أو فاضيًا. نطلب من TMDB بدلها
+         من كتالوج الموقع نفسه: كلمات العمل المفتاحية + نوعه + نوعه
+         السينمائي، وداخل مفردات القسم — فالناتج شبيه فعلًا ويعدّي
+         البوابة بدل ما يُرمى. */
+      var own = (it.keywordIds || []).slice(0, 4);
+      var genres = (it.genreIds || []).slice(0, 2).join('|');
+      if (own.length) {
+        jobs.push(CS.tmdb.discover(it.type, {
+          with_keywords: own.join('|'),
+          with_genres: genres
+        }, pg));
+      }
+      jobs.push(CS.tmdb.discover(it.type, {
+        with_keywords: ADULT.join('|'),
+        with_genres: genres
+      }, pg + 3));
+
+      return Promise.all(jobs).then(function (r) {
+        return r.reduce(function (acc, x) { return acc.concat((x && x.items) || []); }, []);
       }).catch(function () { return []; });
     }).then(function (sets) {
       /* «توصيتي» ما يستعمل apiPage — صفحاته من relatedPage مباشرة */
