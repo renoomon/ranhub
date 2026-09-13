@@ -362,21 +362,42 @@
          من كتالوج الموقع نفسه: كلمات العمل المفتاحية + نوعه + نوعه
          السينمائي، وداخل مفردات القسم — فالناتج شبيه فعلًا ويعدّي
          البوابة بدل ما يُرمى. */
-      var own = (it.keywordIds || []).slice(0, 4);
+      var own = (it.keywordIds || []).slice(0, 3);
       var genres = (it.genreIds || []).slice(0, 2).join('|');
-      if (own.length) {
-        jobs.push(CS.tmdb.discover(it.type, {
-          with_keywords: own.join('|'),
-          with_genres: genres
-        }, pg));
-      }
+      /* نداء لكل كلمة من كلمات العمل على حدة — لا اتحادها: الاتحاد
+         (OR) يرجّع أشهر الأفلام لأن كلمة مثل «husband wife relationship»
+         توقع على دراما عادية، فتغرق نتيجة الموضوع. النداء المفرد يعطي
+         أعمال الموضوع نفسه (swinger · sexploitation ...).
+         نعلّم مواقعها themeAt عشان نتائجها تُقدَّم وتُوسم. */
+      var themeAt = own.length ? jobs.length : -1;
+      own.forEach(function (kw) {
+        jobs.push(CS.tmdb.discover(it.type, { with_keywords: String(kw) }, pg));
+      });
+      /* حشو: كتالوج الموقع بنفس التصنيف — يملأ القسم إذا الموضوع ضيّق،
+         لكنه يترتّب بعد نتائج الموضوع لا قبلها. */
       jobs.push(CS.tmdb.discover(it.type, {
         with_keywords: ADULT.join('|'),
         with_genres: genres
       }, pg + 3));
 
       return Promise.all(jobs).then(function (r) {
-        return r.reduce(function (acc, x) { return acc.concat((x && x.items) || []); }, []);
+        /* discover يرجّع مصفوفة عارية وrelatedPage يرجّع {items} —
+           الخلط بينهما كان يرمي نتائج discover كلها بلا ما ينتبه أحد. */
+        var pick = function (x) { return Array.isArray(x) ? x : ((x && x.items) || []); };
+        var theme = [];
+        var rest = [];
+        r.forEach(function (x, i) {
+          var list = pick(x);
+          if (themeAt >= 0 && i >= themeAt && i < themeAt + own.length) {
+            list.forEach(function (m) { m.themeHit = true; });
+            theme = theme.concat(list);
+          } else {
+            rest = rest.concat(list);
+          }
+        });
+        /* الموضوع أولًا: absorb يحجز المفاتيح بالترتيب، فلو جاءت الترشيحات
+           العامة قبله كانت حجزت نفس الأعمال وضاع الوسم عنها. */
+        return theme.concat(rest);
       }).catch(function () { return []; });
     }).then(function (sets) {
       /* «توصيتي» ما يستعمل apiPage — صفحاته من relatedPage مباشرة */
@@ -491,7 +512,13 @@
   function rank() {
     /* قسم التوصيات يترتّب بنسبة التطابق نفسها، أعلاها أولًا */
     if (state.tab === 'foryou') {
-      state.items.sort(function (a, b) { return (b.matchPct || 0) - (a.matchPct || 0); });
+      /* الموضوع قبل التصنيف: العمل اللي يشارك قصة العمل اللي عجبك
+         يسبق اللي يشاركه النوع فقط، ونسبة التطابق تفصل داخل كل مجموعة. */
+      state.items.sort(function (a, b) {
+        var t = (b.themeHit ? 1 : 0) - (a.themeHit ? 1 : 0);
+        if (t) return t;
+        return (b.matchPct || 0) - (a.matchPct || 0);
+      });
       return;
     }
     if (state.sort !== 'foryou') return;
