@@ -327,7 +327,8 @@
       hardFail: false,
       maxPages: { movie: 1, tv: 1 },
       items: [], seen: {}, page: 0, exhausted: false, loading: false, token: 0,
-      lastError: ''
+      lastError: '',
+      lastErrorHost: ''
     };
   }
 
@@ -465,7 +466,7 @@
         var failedT = (lists || []).filter(function (l) { return l && l.failed; }).length;
         state.roundFailed = lists.length > 0 && failedT === lists.length;
         (lists || []).forEach(function (l) {
-          if (l && l.failed) state.lastError = l.failed;
+          if (l && l.failed) { state.lastError = l.failed; state.lastErrorHost = l.failedHost || ''; }
           if (tagName && CS.certs.seedKeyword) {
             (l || []).forEach(function (it) { CS.certs.seedKeyword(it, tagName); });
           }
@@ -525,7 +526,7 @@
         sets.forEach(function (l, i) {
           var k = kinds[i];
           if (!k || !l) return;
-          if (l.failed) state.lastError = l.failed;
+          if (l.failed) { state.lastError = l.failed; state.lastErrorHost = l.failedHost || ''; }
           /* دليل المصدر: كل عمل في هذي القائمة يحمل هذي الكلمة قطعًا */
           var nm = nameMap[k.kw];
           if (nm && CS.certs.seedKeyword) {
@@ -672,9 +673,11 @@
 
   /**
    * يحمّل الدفعة التالية ويضيفها للقائمة.
+   * onRound (اختياري): يُنادى بعد كل جولة بما تجمّع حتى الآن، عشان
+   * الواجهة ترسم المحسوم من أول جولة بدل ما تنتظر الدفعة كاملة.
    * يرجّع { items, added, exhausted }
    */
-  function loadMore() {
+  function loadMore(onRound) {
     if (state.loading || state.exhausted) {
       return Promise.resolve({ items: state.items, added: 0, exhausted: state.exhausted });
     }
@@ -705,6 +708,11 @@
           state.exhausted = true;
           state.hardFail = true;
           return;
+        }
+
+        /* الواجهة ترسم المحسوم الآن بدل ما تنتظر بقيّة الجولات */
+        if (onRound && state.items.length > before) {
+          try { onRound(state.items); } catch (e) { /* الرسم ما يوقف التحميل */ }
         }
 
         if (state.items.length === before) {

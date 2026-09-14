@@ -125,7 +125,6 @@
   var queue = [];
   var tokens = CONF.burst;
   var lastRefill = Date.now();
-  var pausedUntil = 0;           /* يُرفع عند 429 — تراجع عام */
 
   function refill() {
     var now = Date.now();
@@ -138,34 +137,66 @@
 
   function pump() {
     if (!queue.length) return;
-    var now = Date.now();
-    if (now < pausedUntil) { setTimeout(pump, Math.min(1200, pausedUntil - now)); return; }
     refill();
+    var now = Date.now();
+    var waited = 0;
     while (queue.length && active < CONF.concurrency && tokens >= 1) {
+      /* نتخطّى الوظائف الموقوفة بمضيفها بدل ما نجمّد الطابور كله:
+         تراجع الترجمة ما يوقف TMDB */
+      var idx = -1;
+      for (var i = 0; i < queue.length; i++) {
+        if (now >= hostState(queue[i].host).paused) { idx = i; break; }
+      }
+      if (idx === -1) { waited = 1; break; }
       tokens -= 1;
       active++;
-      var job = queue.shift();
+      var job = queue.splice(idx, 1)[0];
       stats.queued = queue.length;
-      job();
+      job.run();
     }
-    if (queue.length) setTimeout(pump, 90);
+    if (queue.length) setTimeout(pump, waited ? 300 : 90);
   }
 
-  function schedule(fn) {
+  function schedule(host, fn) {
     return new Promise(function (resolve, reject) {
-      queue.push(function () {
-        fn().then(function (v) { active--; pump(); resolve(v); },
-                  function (e) { active--; pump(); reject(e); });
+      queue.push({
+        host: host,
+        run: function () {
+          fn().then(function (v) { active--; pump(); resolve(v); },
+                    function (e) { active--; pump(); reject(e); });
+        }
       });
       stats.queued = queue.length;
       pump();
     });
   }
 
-  /* تراجع عام عند 429 — كل الطلبات تنتظر، لا هذا الطلب وحده */
-  function backOffAll(ms) {
-    pausedUntil = Math.max(pausedUntil, Date.now() + Math.min(ms || 2000, 30000));
+  /* ------------------------------------------------------------
+     التراجع والقاطع — لكل مضيف على حدة.
+
+     أول نسخة كانت تحسبهما للموقع كله: مزوّد واحد ميت (حاجب إعلانات
+     على نطاقه، أو مفتاح OMDb منتهٍ، أو حصّة الترجمة خلصت) يفتح
+     القاطع فتسقط طلبات TMDB السليمة معه، ويطلع للمستخدم «ما قدرت
+     أوصل لـ TMDB» و TMDB بخير. الحالة الآن معزولة لكل نطاق.
+     ------------------------------------------------------------ */
+  function hostOf(url) {
+    try { return new URL(url, location.href).host; } catch (e) { return 'other'; }
   }
+
+  var hosts = {};   /* host → { paused, fails, until, lastError } */
+
+  function hostState(h) {
+    if (!hosts[h]) hosts[h] = { paused: 0, fails: 0, until: 0, lastError: null };
+    return hosts[h];
+  }
+
+  function backOffHost(h, ms) {
+    var st = hostState(h);
+    st.paused = Math.max(st.paused, Date.now() + Math.min(ms || 2000, 30000));
+  }
+
+  /* الاسم القديم باقٍ للتوافق: يتراجع عن مضيف TMDB وحده */
+  function backOffAll(ms) { backOffHost(hostOf(CS.config.tmdb.base), ms); }
 
   /* ------------------------------------------------------------
      قاطع الدائرة.
@@ -178,25 +209,23 @@
      ------------------------------------------------------------ */
   var CIRCUIT_AT = 8;             /* كم إخفاقًا متتاليًا يفتح القاطع */
   var CIRCUIT_MS = 12000;         /* كم يبقى مفتوحًا قبل محاولة جديدة */
-  var consecutiveFails = 0;
-  var circuitUntil = 0;
-  var lastError = null;
 
-  function circuitOpen() { return Date.now() < circuitUntil; }
+  function circuitOpen(h) { return Date.now() < hostState(h).until; }
 
-  function noteFail(err) {
+  function noteFail(h, err) {
     /* ٤٠٤ ليس عطلًا في الخدمة — عمل غير موجود فقط. لا نحسبه هنا
-       وإلا فتحت بضعة روابط ميتة القاطع على موقع سليم تمامًا.
+       وإلا فتحت بضعة روابط ميتة القاطع على مضيف سليم تمامًا.
        نحسب: انقطاع الشبكة · المهلة · 429 · 401/403 · أخطاء الخادم. */
     var s = err && err.status;
     var systemic = !s || s === 0 || s === 429 || s === 401 || s === 403 || s >= 500;
     if (!systemic) return;
-    lastError = err;
-    consecutiveFails++;
-    if (consecutiveFails >= CIRCUIT_AT) circuitUntil = Date.now() + CIRCUIT_MS;
+    var st = hostState(h);
+    st.lastError = err;
+    st.fails++;
+    if (st.fails >= CIRCUIT_AT) st.until = Date.now() + CIRCUIT_MS;
   }
 
-  function noteOk() { consecutiveFails = 0; circuitUntil = 0; }
+  function noteOk(h) { var st = hostState(h); st.fails = 0; st.until = 0; }
 
   /* ---------- الطلب الفعلي ---------- */
 
@@ -218,7 +247,7 @@
       clearTimeout(timer);
       if (res.status === 429) {
         var ra = +(res.headers.get('retry-after') || 0);
-        backOffAll(ra ? ra * 1000 : 2500);
+        backOffHost(hostOf(url), ra ? ra * 1000 : 2500);
         var e429 = new Error('RATE_LIMIT'); e429.status = 429; throw e429;
       }
       if (res.status === 401 || res.status === 403) {
@@ -248,17 +277,23 @@
     var tries = opts.retries === undefined ? CONF.retries : opts.retries;
     var attempt = 0;
 
+    var host = hostOf(url);
+
     function go() {
-      /* القاطع مفتوح؟ نفشل فورًا بالخطأ الأخير بلا طابور ولا إعادة */
-      if (circuitOpen()) {
-        var e = lastError || new Error('SERVICE_DOWN');
+      /* قاطع هذا المضيف مفتوح؟ نفشل فورًا بلا طابور ولا إعادة */
+      if (circuitOpen(host)) {
+        var e = hostState(host).lastError || new Error('SERVICE_DOWN');
+        try { e.host = host; } catch (e3) {}
         return Promise.reject(e);
       }
-      return schedule(function () { return fetchOnce(url, opts); })
-        .then(function (v) { noteOk(); return v; })
+      return schedule(host, function () { return fetchOnce(url, opts); })
+        .then(function (v) { noteOk(host); return v; })
         .catch(function (err) {
-          noteFail(err);
-          if (circuitOpen()) throw err;
+          /* من أي نطاق جاء الخطأ — بدونه كانت الواجهة تنسب خطأ
+             مزوّد ثانوي إلى TMDB */
+          if (err && !err.host) { try { err.host = host; } catch (e2) {} }
+          noteFail(host, err);
+          if (circuitOpen(host)) throw err;
           if (attempt >= tries || !retriable(err)) throw err;
           attempt++;
           stats.retried++;
@@ -392,7 +427,16 @@
     },
     shouldPersist: function (path) { return PERSIST_RE.test(path); },
     clearCache: clearCache,
-    backOffAll: backOffAll
+    backOffAll: backOffAll,
+    backOffHost: backOffHost,
+    hostHealth: function () {
+      var out = {};
+      Object.keys(hosts).forEach(function (h) {
+        out[h] = { fails: hosts[h].fails, open: Date.now() < hosts[h].until,
+                   paused: Date.now() < hosts[h].paused };
+      });
+      return out;
+    }
   };
 
 })(window.CS);

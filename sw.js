@@ -16,7 +16,7 @@
 
 'use strict';
 
-var VERSION = 'ranhub-v5.0.0';
+var VERSION = 'ranhub-v5.0.1';
 var SHELL = VERSION + '-shell';
 var IMGS  = VERSION + '-img';
 var IMG_MAX = 300;
@@ -25,30 +25,30 @@ var SHELL_FILES = [
   './',
   './index.html',
   './manifest.webmanifest',
-  './assets/css/style.css?v=5.0.0',
+  './assets/css/style.css?v=5.0.1',
   './assets/icons/icon-192.svg',
   './assets/icons/icon-512.svg',
-  './assets/js/config.js?v=5.0.0',
-  './assets/js/db.js?v=5.0.0',
-  './assets/js/net.js?v=5.0.0',
-  './assets/js/theme.js?v=5.0.0',
-  './assets/js/fuzzy.js?v=5.0.0',
-  './assets/js/taste.js?v=5.0.0',
-  './assets/js/library.js?v=5.0.0',
-  './assets/js/certs.js?v=5.0.0',
-  './assets/js/tmdb.js?v=5.0.0',
-  './assets/js/catalog.js?v=5.0.0',
-  './assets/js/reco.js?v=5.0.0',
-  './assets/js/wiki.js?v=5.0.0',
-  './assets/js/contentsources.js?v=5.0.0',
-  './assets/js/sources.js?v=5.0.0',
-  './assets/js/datasources.js?v=5.0.0',
-  './assets/js/links.js?v=5.0.0',
-  './assets/js/feed.js?v=5.0.0',
-  './assets/js/freecatalog.js?v=5.0.0',
-  './assets/js/search.js?v=5.0.0',
-  './assets/js/ui.js?v=5.0.0',
-  './assets/js/app.js?v=5.0.0'
+  './assets/js/config.js?v=5.0.1',
+  './assets/js/db.js?v=5.0.1',
+  './assets/js/net.js?v=5.0.1',
+  './assets/js/theme.js?v=5.0.1',
+  './assets/js/fuzzy.js?v=5.0.1',
+  './assets/js/taste.js?v=5.0.1',
+  './assets/js/library.js?v=5.0.1',
+  './assets/js/certs.js?v=5.0.1',
+  './assets/js/tmdb.js?v=5.0.1',
+  './assets/js/catalog.js?v=5.0.1',
+  './assets/js/reco.js?v=5.0.1',
+  './assets/js/wiki.js?v=5.0.1',
+  './assets/js/contentsources.js?v=5.0.1',
+  './assets/js/sources.js?v=5.0.1',
+  './assets/js/datasources.js?v=5.0.1',
+  './assets/js/links.js?v=5.0.1',
+  './assets/js/feed.js?v=5.0.1',
+  './assets/js/freecatalog.js?v=5.0.1',
+  './assets/js/search.js?v=5.0.1',
+  './assets/js/ui.js?v=5.0.1',
+  './assets/js/app.js?v=5.0.1'
 ];
 
 self.addEventListener('install', function (e) {
@@ -146,7 +146,11 @@ self.addEventListener('fetch', function (e) {
         }
         return res;
       }).catch(function () {
-        return caches.match('./index.html');
+        /* ما نرجّع index.html بدل ملف جافاسكربت أو CSS ساقط.
+           الملف الناقص كان يوصل للمتصفّح صفحةَ HTML بنوع خاطئ،
+           فيرمي «Unexpected token '<'» بدل خطأ شبكة مفهوم، ويضيع
+           السبب الحقيقي. الاحتياط لصفحات التنقّل وحدها، وهو فوق. */
+        return new Response('', { status: 504, statusText: 'Offline' });
       });
     })
   );

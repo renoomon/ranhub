@@ -500,6 +500,43 @@
 
   var autoRounds = 0;
 
+  /* ------------------------------------------------------------
+     الرسم المبكر.
+
+     البوابة تحتاج وسوم TMDB، وانتظار وسوم أربعين عملًا قبل أول رسم
+     كان يخلّي الشاشة هياكل فاضية ثوانيَ كاملة على اتصال بارد. لكن
+     جزءًا من الجولة محسوم بلا أي طلب: العمل الراجع من /discover
+     بكلمة قوية يحمل تلك الكلمة قطعًا، فبذرتها تفتح له البوابة
+     مجانًا. نرسم المحسوم فورًا، وبقيّة الجولة تكمل في الخلفية
+     ويُعاد الرسم كاملًا. ما نرسم شيئًا لم تحسمه البوابة.
+     ------------------------------------------------------------ */
+  var EARLY_MIN = 6;
+
+  function paintEarly(items) {
+    var grid = $('#feed-grid');
+    if (!grid || grid.querySelector('.card')) return;   /* فيه معروض أصلًا */
+
+    var st = CS.feed.current();
+    /* «توصيتي» نسبته تُحسب بعد وصول الوسوم — رسم مبكر فيه يعرض أرقامًا
+       تتغيّر تحت عين المستخدم، فنتركه للرسم الكامل */
+    if (st.tab === 'foryou') return;
+
+    var tagOn = !!st.tag;
+    var ready = (items || []).filter(function (it) {
+      return CS.certs.isAdultWork(it) === true && (tagOn || CS.certs.kindFits(it) !== false);
+    });
+    if (ready.length < EARLY_MIN) return;
+
+    $('#feed-empty').hidden = true;
+    /* اللي نرسمه نعرفه: النقر على بطاقة مرسومة مبكرًا لازم يفتح
+       صفحتها من الذاكرة لا يعيد جلبها */
+    remember(ready);
+    stampTaste(ready);
+    grid.innerHTML = CS.ui.cards(ready);
+    grid.setAttribute('aria-busy', 'true');   /* الجولة ما خلصت بعد */
+    $('#feed-count').textContent = '';
+  }
+
   function loadFeed(first) {
     if (feedBusy) return;
     feedBusy = true;
@@ -507,12 +544,18 @@
     var btn = $('#btn-feed-more');
     if (btn) { btn.disabled = true; btn.textContent = '⏳ يحمّل…'; }
 
-    CS.feed.loadMore().then(function (res) {
+    CS.feed.loadMore(function (sofar) {
+      /* بعد كل جولة: المحسوم بلا طلب يظهر الآن، لا بعد الدفعة كاملة
+         ولا بعد أربعين نداء وسوم */
+      if (gen !== feedGen || CS.state.view !== 'home') return;
+      paintEarly(sofar);
+    }).then(function (res) {
       if (gen !== feedGen) return;
       if (CS.state.view !== 'home') { feedBusy = false; return; }
 
       var items = res.items;
       remember(items);
+      paintEarly(items);
 
       /* البوابة تحتاج وسوم كل عمل بنرسمه — حدّ ثابت لكل جولة */
       return ensureHeat(items, 40).then(function () {
@@ -551,7 +594,7 @@
     /* الشبكة رجعت فاضية لأن TMDB ما رد، لا لأن الفلاتر ضيّقة.
        كان الفرق ضائعًا: يُعرض «ما وصل شي بهذي الفلاتر» والمفتاح ميت. */
     if (!items.length && (st.lastError || st.hardFail)) {
-      showFeedError(CS.tmdb.explain({ message: st.lastError }));
+      showFeedError(CS.tmdb.explain({ message: st.lastError, host: st.lastErrorHost }));
       if (btn) { btn.disabled = false; btn.textContent = 'اعرض المزيد'; }
       return;
     }
@@ -1231,7 +1274,10 @@
         if (rep.lists) bits.push(rep.lists + ' عمل في قوائمك');
         if (rep.progress) bits.push(rep.progress + ' متابعة مشاهدة');
         if (rep.settings) bits.push(rep.settings + ' إعداد');
-        CS.ui.toast(bits.length ? '♻️ رجّعت ' + bits.join(' · ') : '🟡 ما فيه شي جديد في الملف');
+        var msg = bits.length ? '♻️ رجّعت ' + bits.join(' · ') : '🟡 ما فيه شي جديد في الملف';
+        /* الصدق في العدّ: قوائمك لها سقف، وما تجاوزه ما انحفظ */
+        if (rep.dropped) msg += ' — و' + rep.dropped + ' ما دخلوا (القائمة وصلت سقفها)';
+        CS.ui.toast(msg);
         updateLibCount();
         renderLibrary();
       } catch (e) {
@@ -2120,6 +2166,27 @@
     key = key.trim();
     var state = $('#key-state');
 
+    /* ------------------------------------------------------------
+       التحقق كله قبل أي كتابة.
+
+       كان الترتيب: نحفظ اللغة والمنطقة والسمة… ثم نتحقق من الوسيط
+       فنخرج. فرابط وسيط غلط يترك نصف الإعدادات محفوظًا ونصفها لا،
+       والمستخدم يقرأ «رابط الوسيط غلط» ويظن أن شيئًا ما انحفظ.
+       ------------------------------------------------------------ */
+    var proxy = (($('#set-proxy') || {}).value || '').trim();
+    if (proxy && !/^https:\/\/[^\s]+$/i.test(proxy)) {
+      state.className = 'keystate is-bad';
+      state.textContent = '🔴 رابط الوسيط لازم يبدأ بـ https:// — ما انحفظ شي';
+      return;
+    }
+
+    var mail = (($('#set-tr-email') || {}).value || '').trim();
+    if (mail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail)) {
+      state.className = 'keystate is-bad';
+      state.textContent = '🔴 صيغة البريد غير صحيحة — ما انحفظ شي';
+      return;
+    }
+
     CS.state.lang = CS.store.set(CS.KEYS.lang, $('#set-lang').value);
     CS.state.region = CS.store.set(CS.KEYS.region, $('#set-region').value);
     CS.store.set(CS.KEYS.autoTr, $('#set-autotr').checked);
@@ -2130,14 +2197,7 @@
     CS.store.set(CS.KEYS.certTier, certFor(currentTab()));
     $('#lang-label').textContent = CS.state.lang === 'ar' ? 'ع' : 'EN';
 
-    /* الوسيط: https فقط */
-    var proxy = ($('#set-proxy') || {}).value || '';
-    proxy = proxy.trim();
-    if (proxy && !/^https:\/\/[^\s]+$/i.test(proxy)) {
-      state.className = 'keystate is-bad';
-      state.textContent = '🔴 رابط الوسيط لازم يبدأ بـ https://';
-      return;
-    }
+    /* الوسيط: https فقط — تحقّق فوق قبل أي كتابة */
     if (proxy) CS.store.set(CS.KEYS.proxy, proxy.replace(/\/+$/, ''));
     else CS.store.remove(CS.KEYS.proxy);
 
@@ -2155,13 +2215,6 @@
     CS.store.set(CS.KEYS.alertsOn, alertsWanted);
     if (alertsWanted) CS.library.alerts.request();
 
-    var mail = ($('#set-tr-email') || {}).value || '';
-    mail = mail.trim();
-    if (mail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail)) {
-      state.className = 'keystate is-bad';
-      state.textContent = '🔴 صيغة البريد غير صحيحة';
-      return;
-    }
     if (mail) CS.store.set(CS.KEYS.email, mail); else CS.store.remove(CS.KEYS.email);
 
     if (!key) {

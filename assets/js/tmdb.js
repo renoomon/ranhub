@@ -219,6 +219,7 @@
       .catch(function (err) {
         var e = [];
         e.totalPages = 1; e.totalResults = 0; e.failed = (err && err.message) || 'ERR';
+        e.failedHost = (err && err.host) || '';   /* عشان الرسالة تسمّي النطاق الصحيح */
         return e;
       });
   }
@@ -520,16 +521,36 @@
     return n ? 'رجعت ' + n + ' نتيجة' : 'اتصل بنجاح لكن بلا نتائج';
   }
 
+  /* ------------------------------------------------------------
+     شرح الخطأ.
+
+     كل خطأ يحمل نطاقه من net.js، والرسالة تسمّي النطاق الحقيقي.
+     نسبة خطأ مزوّد ثانوي (ترجمة · ويكيبيديا · أرشيف) إلى TMDB
+     كانت ترسل المستخدم يفحص مفتاحه وهو سليم تمامًا.
+     ------------------------------------------------------------ */
+  function hostOfErr(err) {
+    var h = err && err.host;
+    if (!h) return '';
+    try { return h === new URL(CS.config.tmdb.base).host ? 'TMDB' : h; }
+    catch (e) { return h; }
+  }
+
   function explain(err) {
     var m = err && err.message || '';
-    if (m === 'BAD_KEY')     return 'TMDB رفض المفتاح (401) — المفتاح غلط أو ملغى';
-    if (m === 'RATE_LIMIT')  return 'تجاوزت حد الطلبات (429) — الموقع يتراجع تلقائيًا ويعيد المحاولة';
+    var who = hostOfErr(err) || 'TMDB';   /* بلا نطاق: المسار الافتراضي هو TMDB */
+    var isTmdb = who === 'TMDB';
+
+    if (m === 'BAD_KEY')     return who + ' رفض المفتاح (401) — المفتاح غلط أو ملغى';
+    if (m === 'RATE_LIMIT')  return 'تجاوزت حد طلبات ' + who + ' (429) — الموقع يتراجع تلقائيًا ويعيد المحاولة';
     if (m === 'NO_KEY')      return 'ما فيه مفتاح مضبوط ولا وسيط';
-    if (m === 'TIMEOUT')     return 'الطلب تجاوز المهلة — الشبكة بطيئة أو محجوبة';
+    if (m === 'TIMEOUT')     return 'الطلب إلى ' + who + ' تجاوز المهلة — الشبكة بطيئة أو محجوبة';
+    if (m === 'SERVICE_DOWN') return who + ' ساقط الآن — الموقع أوقف الطلبات إليه مؤقتًا';
     if (m === 'ALL_SOURCES_FAILED') return 'كل المصادر البديلة سقطت';
-    if (/^HTTP_/.test(m))    return 'TMDB رد بخطأ ' + m.replace('HTTP_', '');
+    if (/^HTTP_/.test(m))    return who + ' رد بخطأ ' + m.replace('HTTP_', '');
     if (/Failed to fetch|NetworkError|Load failed/i.test(m))
-      return 'ما وصلت لـ TMDB إطلاقًا — إنترنت مقطوع، أو الشبكة/المزوّد حاجب api.themoviedb.org';
+      return isTmdb
+        ? 'ما وصلت لـ TMDB إطلاقًا — إنترنت مقطوع، أو الشبكة/المزوّد حاجب api.themoviedb.org'
+        : 'ما وصلت لـ ' + who + ' إطلاقًا — إنترنت مقطوع أو النطاق محجوب';
     return m || 'خطأ غير معروف';
   }
 

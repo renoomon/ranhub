@@ -10,7 +10,7 @@ window.CS = window.CS || {};
   /* ---------- الثوابت ---------- */
 
   CS.config = {
-    version: '5.0.0',
+    version: '5.0.1',
     tmdb: {
       base: 'https://api.themoviedb.org/3',
       img: 'https://image.tmdb.org/t/p',
@@ -104,24 +104,34 @@ window.CS = window.CS || {};
 
   var memory = {};
   var lsBroken = false;
+  var unsaved = {};   /* مفاتيح فشلت كتابتها — الرام أحدث من القرص فيها وحدها */
 
   CS.store = {
     get: function (key, fallback) {
+      /* ترتيب القراءة يهم.
+         كان فيه خلل: أول كتابة تفشل (امتلأت الحصّة) ترفع lsBroken،
+         وبعدها كل قراءة تتجاهل localStorage كليًا — فبيانات المستخدم
+         المحفوظة من قبل تصير كأنها غير موجودة بقيّة الجلسة. الامتلاء
+         يمنع الكتابة لا القراءة. فالقرص هو المرجع دائمًا، إلا مفتاحًا
+         فشلت كتابته في هذه الجلسة: فيه وحده الرام أحدث من القرص. */
+      if (unsaved[key] === 1) return memory[key];
+      if (unsaved[key] === 2) return fallback;      /* حُذف ولم يُحذف من القرص */
       try {
-        if (lsBroken) return key in memory ? memory[key] : fallback;
         var raw = window.localStorage.getItem(key);
-        if (raw === null) return key in memory ? memory[key] : fallback;
-        return JSON.parse(raw);
-      } catch (e) {
-        return key in memory ? memory[key] : fallback;
-      }
+        if (raw !== null) return JSON.parse(raw);
+      } catch (e) { /* وضع خاص أو قيمة تالفة — نكمل للرام */ }
+      return key in memory ? memory[key] : fallback;
     },
     set: function (key, value) {
       memory[key] = value;
-      try { window.localStorage.setItem(key, JSON.stringify(value)); }
+      try {
+        window.localStorage.setItem(key, JSON.stringify(value));
+        delete unsaved[key];
+      }
       catch (e) {
         /* الحصّة امتلأت أو الوضع خاص — نبقى شغّالين في الرام، ونبلّغ
            مرة واحدة بدل ما نفشل بصمت كما كان يحصل */
+        unsaved[key] = 1;
         if (!lsBroken) {
           lsBroken = true;
           try { window.dispatchEvent(new CustomEvent('cs:storage-full', { detail: { key: key } })); }
@@ -132,7 +142,9 @@ window.CS = window.CS || {};
     },
     remove: function (key) {
       delete memory[key];
-      try { window.localStorage.removeItem(key); } catch (e) { /* تجاهل */ }
+      delete unsaved[key];
+      try { window.localStorage.removeItem(key); }
+      catch (e) { unsaved[key] = 2; }
     },
     /* كم بايت يشغّل الموقع في localStorage — تُعرض في الإعدادات */
     bytes: function () {

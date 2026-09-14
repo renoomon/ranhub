@@ -280,7 +280,7 @@
      */
     restore: function (data, mode) {
       if (!data || typeof data !== 'object') throw new Error('BAD_FILE');
-      var report = { taste: 0, lists: 0, settings: 0, progress: 0 };
+      var report = { taste: 0, lists: 0, settings: 0, progress: 0, dropped: 0 };
 
       /* ملفّ تصدير قديم: likes/dislikes فقط */
       if (!data.store && (Array.isArray(data.likes) || Array.isArray(data.dislikes))) {
@@ -301,18 +301,34 @@
         }
         if (key === K.fav || key === K.later || key === K.follow) {
           if (!Array.isArray(incoming)) return;
-          var cur = readList(key);
+          var before = readList(key);
+          var had = {};
+          before.forEach(function (x) { had[keyOf(x)] = true; });
+
+          /* «استبدال» يعني استبدالًا فعليًا: القائمة تصير قائمة الملف.
+             كان الشرطان يلغي بعضهما فالوضعان يعملان دمجًا واحدًا. */
+          var cur = replace ? [] : before.slice();
           var have = {};
           cur.forEach(function (x) { have[keyOf(x)] = true; });
+
           incoming.forEach(function (x) {
             if (!x || !x.type || x.id == null) return;
-            if (have[keyOf(x)] && !replace) return;
-            if (have[keyOf(x)]) return;
+            var k = keyOf(x);
+            if (have[k]) return;
             cur.push(x);
-            have[keyOf(x)] = true;
-            report.lists++;
+            have[k] = true;
           });
+
+          /* التقرير يعدّ ما انحفظ فعلًا: writeList يقصّ عند MAX،
+             وعدّ ما قبل القصّ كان يقول «رجّعت ٩٠٠» والمحفوظ ٦٠٠. */
           writeList(key, cur);
+          var after = readList(key);
+          var kept = 0;
+          after.forEach(function (x) { if (!had[keyOf(x)]) kept++; });
+          report.lists += kept;
+          if (cur.length > after.length) {
+            report.dropped = (report.dropped || 0) + (cur.length - after.length);
+          }
           return;
         }
         if (key === K.progress) {
